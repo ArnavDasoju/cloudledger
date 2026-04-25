@@ -1,0 +1,21 @@
+version: 2
+
+sources:
+  - name: cloudledger
+    description: "CloudLedger PostgreSQL database — bronze/silver/gold layers"
+    schema: public
+    tables:
+      - name: raw_billing_lines
+        description: "Bronze layer — raw FOCUS 1.2 billing line items"
+      - name: invoices
+        description: "Silver layer — normalized invoice records"
+      - name: resources
+        description: "Silver layer — one row per resource per billing period"
+      - name: allocations
+        description: "Silver layer — billing lines mapped to resources with confidence"
+      - name: change_events
+        description: "Silver layer — infrastructure change events from Terraform/GitHub"
+      - name: variance_report
+        description: "Gold layer — month-over-month cost variance with reason codes"
+      - name: quality_log
+        description: "Gold layer — audit trail for data quality checks"

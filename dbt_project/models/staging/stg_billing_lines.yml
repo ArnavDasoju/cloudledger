@@ -1,0 +1,28 @@
+version: 2
+
+models:
+  - name: stg_billing_lines
+    description: "Staging model for raw billing lines — casts numeric fields and filters out credit lines."
+    columns:
+      - name: id
+        description: "Primary key from raw_billing_lines"
+        tests:
+          - not_null
+          - unique
+      - name: invoice_id
+        description: "AWS invoice identifier"
+        tests:
+          - not_null
+      - name: resource_id
+        description: "AWS resource ARN or identifier"
+      - name: billed_cost
+        description: "Cost billed to the account for this line item"
+      - name: charge_type
+        description: "Type of charge (Usage, Tax, etc.)"
+        tests:
+          - accepted_values:
+              values: ['Usage', 'Tax', 'Fee', 'Refund', 'SavingsPlanCoveredUsage', 'SavingsPlanNegation']
+      - name: is_credit
+        description: "True if this line item is a credit (negative charge)"
+      - name: is_usage
+        description: "True if this line item is a usage charge"

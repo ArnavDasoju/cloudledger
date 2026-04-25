@@ -1,0 +1,23 @@
+version: 2
+
+models:
+  - name: dim_resources
+    description: "Dimension table of all unique resources with their latest metadata, ownership, Terraform status, and cumulative drift spend."
+    columns:
+      - name: resource_id
+        description: "AWS resource ARN or unique identifier — natural key"
+        tests:
+          - not_null
+          - unique
+      - name: service_name
+        description: "AWS service (EC2, RDS, S3, Lambda, etc.)"
+      - name: team
+        description: "Owning team derived from resource tags"
+      - name: in_terraform_state
+        description: "Whether this resource is currently managed by Terraform"
+      - name: latest_period_cost
+        description: "Cost from the most recent billing period"
+      - name: total_drift_spend
+        description: "Cumulative spend on this resource across periods where it was not in Terraform state"
+      - name: periods_observed
+        description: "Number of billing periods this resource has appeared in"

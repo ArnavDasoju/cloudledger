@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cloudledger"
+version = "0.1.0"
+description = "Cloud billing variance analysis — ingest, normalize, attribute, and visualize month-over-month cost changes."
+requires-python = ">=3.10"
+dependencies = [
+    "pandas>=2.1",
+    "numpy>=1.26",
+    "psycopg2-binary>=2.9",
+    "sqlalchemy>=2.0",
+    "python-dotenv>=1.0",
+    "streamlit>=1.31",
+    "plotly>=5.18",
+    "dbt-core>=1.7",
+    "dbt-postgres>=1.7",
+    "azure-storage-blob>=12.19",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.2"]
+spark = ["pyspark>=3.5"]
+airflow = ["apache-airflow>=2.8"]
+
+[tool.setuptools.packages.find]
+include = ["cloudledger*"]

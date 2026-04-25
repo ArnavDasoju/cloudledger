@@ -1,0 +1,23 @@
+version: 2
+
+models:
+  - name: stg_resources
+    description: "Staging model for resources — filters nulls, casts costs. One row per resource per billing period with Terraform enrichment."
+    columns:
+      - name: id
+        description: "Primary key from resources table"
+        tests:
+          - not_null
+          - unique
+      - name: resource_id
+        description: "AWS resource ARN or unique identifier"
+        tests:
+          - not_null
+      - name: in_terraform_state
+        description: "Whether this resource is managed by Terraform (true) or unmanaged/drift (false)"
+      - name: terraform_module
+        description: "Terraform module that manages this resource, if any"
+      - name: team
+        description: "Owning team derived from resource tags"
+      - name: total_cost
+        description: "Total billed cost for this resource in this billing period"

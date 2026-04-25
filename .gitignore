@@ -1,0 +1,51 @@
+# Virtual environment
+venv/
+.venv/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Environment variables
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# dbt
+dbt_project/target/
+dbt_project/dbt_packages/
+dbt_project/logs/
+.dbt/
+
+# Airflow
+airflow/logs/
+
+# Data files
+data/raw/
+*.csv
+!data/samples/*.csv
+
+# Notebooks
+.ipynb_checkpoints/
+notebooks/.ipynb_checkpoints/
+
+# Next.js
+.next/
+frontend/.next/
+frontend/node_modules/
+node_modules/
+
+# Uploads
+data/uploads/
+
+# npm
+npm-debug.log*

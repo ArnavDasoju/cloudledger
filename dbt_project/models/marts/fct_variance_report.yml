@@ -1,0 +1,31 @@
+version: 2
+
+models:
+  - name: fct_variance_report
+    description: "Fact table for variance analysis — one row per resource per month comparison, enriched with resource metadata and delta classification."
+    columns:
+      - name: id
+        description: "Primary key from variance_report"
+        tests:
+          - not_null
+          - unique
+      - name: resource_id
+        description: "AWS resource ARN or identifier"
+        tests:
+          - not_null
+      - name: reason_code
+        description: "Classification of why the cost changed"
+        tests:
+          - accepted_values:
+              values: ['planned', 'drift', 'usage_growth', 'new_resource', 'removed_resource', 'price_change']
+      - name: delta_bucket
+        description: "Size classification of the variance: large (>20%), medium (5-20%), small (<5%)"
+        tests:
+          - accepted_values:
+              values: ['large', 'medium', 'small']
+      - name: confidence_score
+        description: "Confidence in the reason code attribution (0.00 to 1.00)"
+      - name: reason_description
+        description: "Human-readable explanation of the variance reason code"
+      - name: high_priority_drift
+        description: "True if this is a drift resource with current cost exceeding $1,000"

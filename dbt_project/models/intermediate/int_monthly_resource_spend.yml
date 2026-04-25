@@ -1,0 +1,24 @@
+version: 2
+
+models:
+  - name: int_monthly_resource_spend
+    description: "Month-over-month resource spend with LAG/LEAD window functions, cost ranking per service, and rolling averages."
+    columns:
+      - name: resource_id
+        description: "AWS resource ARN or unique identifier"
+        tests:
+          - not_null
+      - name: billing_period_start
+        description: "First day of the billing period"
+      - name: total_cost
+        description: "Total billed cost for this resource in this period"
+      - name: prior_month_cost
+        description: "Cost from the previous billing period (LAG window function)"
+      - name: mom_delta_dollars
+        description: "Month-over-month cost change in dollars"
+      - name: mom_delta_pct
+        description: "Month-over-month cost change as a percentage"
+      - name: cost_rank_in_service
+        description: "Rank of this resource by cost within its service for this period"
+      - name: rolling_3m_avg_cost
+        description: "Rolling 3-month average cost for trend smoothing"

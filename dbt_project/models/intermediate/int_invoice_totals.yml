@@ -1,0 +1,24 @@
+version: 2
+
+models:
+  - name: int_invoice_totals
+    description: "Invoice-level aggregation with attributed vs unattributed cost breakdown."
+    columns:
+      - name: invoice_id
+        description: "AWS invoice identifier"
+        tests:
+          - not_null
+          - unique
+      - name: total_billed_cost
+        description: "Sum of all non-credit billing lines for this invoice"
+      - name: attribution_coverage_pct
+        description: "Percentage of total cost that has been attributed to a resource/team"
+      - name: total_credits
+        description: "Sum of credit line items for this invoice"
+      - name: total_usage
+        description: "Sum of usage line items for this invoice"
+      - name: reconciliation_status
+        description: "Whether invoice total matches sum of line items — reconciled or variance_detected"
+        tests:
+          - accepted_values:
+              values: ['reconciled', 'variance_detected']
