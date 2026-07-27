@@ -1,8 +1,12 @@
 import type { NextConfig } from "next";
 
+const isProd = process.env.NODE_ENV === "production";
+
 const nextConfig: NextConfig = {
   devIndicators: false,
-  output: "export",
+  // Static export for production (served by FastAPI)
+  // In dev, use Next.js dev server with API proxy via rewrites
+  ...(isProd ? { output: "export" } : {}),
   async rewrites() {
     return [
       {

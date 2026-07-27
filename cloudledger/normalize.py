@@ -131,7 +131,7 @@ def normalize_invoices():
                 session.add(invoice)
             count += 1
 
-    print(f"Normalized {count} invoices.")
+    logger.info("Normalized %d invoices.", count)
     return count
 
 
@@ -165,7 +165,7 @@ def normalize_resources(
             tf_map.update(single_map)
             for rid in single_map:
                 iac_source_map[rid] = "terraform"
-            print(f"Loaded {len(single_map)} terraform identifiers from {tf_path}")
+            logger.info("Loaded %d terraform identifiers from %s", len(single_map), tf_path)
         except Exception as e:
             logger.warning("Failed to parse terraform state %s: %s", tf_path, e)
 
@@ -176,7 +176,7 @@ def normalize_resources(
         tf_map.update(arm_map)
         for rid in arm_map:
             iac_source_map[rid] = "arm"
-        print(f"Merged {len(arm_map)} ARM-template resource identifiers.")
+        logger.info("Merged %d ARM-template resource identifiers.", len(arm_map))
 
     # CloudFormation
     if cloudformation_path:
@@ -185,7 +185,7 @@ def normalize_resources(
         tf_map.update(cfn_map)
         for rid in cfn_map:
             iac_source_map[rid] = "cloudformation"
-        print(f"Merged {len(cfn_map)} CloudFormation resource identifiers.")
+        logger.info("Merged %d CloudFormation resource identifiers.", len(cfn_map))
 
     # Pulumi
     if pulumi_state_path:
@@ -194,7 +194,7 @@ def normalize_resources(
         tf_map.update(pulumi_map)
         for rid in pulumi_map:
             iac_source_map[rid] = "pulumi"
-        print(f"Merged {len(pulumi_map)} Pulumi resource identifiers.")
+        logger.info("Merged %d Pulumi resource identifiers.", len(pulumi_map))
 
     with get_db() as session:
         results = (
@@ -294,7 +294,7 @@ def normalize_resources(
                 session.add(resource)
             count += 1
 
-    print(f"Normalized {count} resource records.")
+    logger.info("Normalized %d resource records.", count)
     return count
 
 
@@ -302,7 +302,7 @@ def seed_sample_change_events(billing_period_start: date, n: int = 5):
     """Seed DEMO change events for testing only. Guarded by CLOUDLEDGER_DEMO_MODE env var."""
     import os
     if not os.environ.get("CLOUDLEDGER_DEMO_MODE"):
-        print("Skipping seed_sample_change_events (set CLOUDLEDGER_DEMO_MODE=1 to enable demo data)")
+        logger.debug("Skipping seed_sample_change_events (set CLOUDLEDGER_DEMO_MODE=1 to enable demo data)")
         return 0
     with get_db() as session:
         existing = session.query(ChangeEvent).count()
@@ -337,7 +337,7 @@ def seed_sample_change_events(billing_period_start: date, n: int = 5):
             count += 1
 
     if count:
-        print(f"Seeded {count} sample change events.")
+        logger.info("Seeded %d sample change events.", count)
     return count
 
 
@@ -454,7 +454,7 @@ def build_logical_resources(billing_period: str):
                     ))
                     count += 1
 
-    print(f"Built {count} logical resource mappings.")
+    logger.info("Built %d logical resource mappings.", count)
     return count
 
 

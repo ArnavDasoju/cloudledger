@@ -363,16 +363,12 @@ def compute_variance(prior_period: str, current_period: str, baseline_mode: str 
 
                 if is_non_tf_iac:
                     reason_code = "non_terraform_iac"
-                    confidence = 0.85
                 elif has_tags:
                     reason_code = "orphan_sdk_created"
-                    confidence = 0.70
                 elif prior_cost > 0 and current_cost < 200:
                     reason_code = "legacy_untracked"
-                    confidence = 0.60
                 else:
                     reason_code = "orphan_unknown"
-                    confidence = 0.50
             elif in_tf and not has_change_event and abs_norm_pct > 5:
                 # Genuine usage growth beyond month-length noise
                 reason_code = "usage_growth"
@@ -382,11 +378,17 @@ def compute_variance(prior_period: str, current_period: str, baseline_mode: str 
             else:
                 reason_code = "price_change"
 
-            # Confidence score (skip if already set by untracked sub-categorization)
-            if not in_tf and not is_excluded and reason_code in ("non_terraform_iac", "orphan_sdk_created", "legacy_untracked", "orphan_unknown"):
-                confidence = Decimal(str(confidence))
-            elif is_excluded:
-                confidence = Decimal("0.90")  # High confidence for known patterns
+            # Confidence score
+            if is_excluded:
+                confidence = Decimal("0.90")
+            elif reason_code == "non_terraform_iac":
+                confidence = Decimal("0.85")
+            elif reason_code == "orphan_sdk_created":
+                confidence = Decimal("0.70")
+            elif reason_code == "legacy_untracked":
+                confidence = Decimal("0.60")
+            elif reason_code == "orphan_unknown":
+                confidence = Decimal("0.50")
             elif in_tf:
                 confidence = Decimal("0.95")
             elif ref and ref.team:
@@ -489,10 +491,9 @@ def compute_variance(prior_period: str, current_period: str, baseline_mode: str 
         "attribution_coverage_pct": float(attribution_coverage_pct),
     }
 
-    print(f"Variance computed: {total_count} rows")
+    logger.info("Variance computed: %d rows, attribution_coverage=%.1f%%", total_count, attribution_coverage_pct)
     for code, n in sorted(counts.items()):
-        print(f"  {code}: {n}")
-    print(f"  attribution_coverage: {attribution_coverage_pct}%")
+        logger.info("  %s: %d", code, n)
     return summary
 
 

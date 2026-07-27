@@ -34,7 +34,7 @@ def _pct(n: float) -> str:
 
 
 DRIFT_CODES = {"drift", "orphan_sdk_created", "orphan_unknown", "legacy_untracked", "non_terraform_iac"}
-USAGE_CODES = {"usage_growth", "new_resource", "removed_resource", "price_change"}
+USAGE_CODES = {"usage_growth", "new_resource", "removed_resource", "price_change", "steady_state"}
 
 
 def generate_close_packet_pdf(current_period: str, prior_period: str, output_path: str) -> str:

@@ -286,8 +286,8 @@ def ingest_focus_csv(filepath: str, provider: str = "auto") -> Dict:
             records, inserted, skipped, errors = _process_chunk(
                 chunk, column_map, existing, provider
             )
-            for record in records:
-                session.add(record)
+            if records:
+                session.bulk_save_objects(records)
             total_inserted += inserted
             total_skipped += skipped
             total_errors += errors
@@ -303,8 +303,8 @@ def ingest_focus_csv(filepath: str, provider: str = "auto") -> Dict:
         "rows_skipped": total_skipped,
         "errors": total_errors,
     }
-    logger.info("Ingest complete: %s", stats)
-    print(f"Ingest: {total_inserted} inserted, {total_skipped} skipped, {total_errors} errors (of {total_read} read)")
+    logger.info("Ingest complete: %d inserted, %d skipped, %d errors (of %d read)",
+                total_inserted, total_skipped, total_errors, total_read)
     return stats
 
 
@@ -340,8 +340,8 @@ def ingest_azure_cost_export(filepath: str) -> Dict:
             records, inserted, skipped, errors = _process_chunk(
                 chunk, AZURE_COLUMN_MAP, existing, "Azure"
             )
-            for record in records:
-                session.add(record)
+            if records:
+                session.bulk_save_objects(records)
             total_inserted += inserted
             total_skipped += skipped
             total_errors += errors
@@ -352,8 +352,8 @@ def ingest_azure_cost_export(filepath: str) -> Dict:
         "rows_skipped": total_skipped,
         "errors": total_errors,
     }
-    logger.info("Azure ingest complete: %s", stats)
-    print(f"Azure ingest: {total_inserted} inserted, {total_skipped} skipped, {total_errors} errors (of {total_read} read)")
+    logger.info("Azure ingest complete: %d inserted, %d skipped, %d errors (of %d read)",
+                total_inserted, total_skipped, total_errors, total_read)
     return stats
 
 

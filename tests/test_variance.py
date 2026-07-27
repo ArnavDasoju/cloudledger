@@ -8,7 +8,7 @@ from cloudledger.variance import compute_variance
 
 
 def test_drift_reason_code(db_session):
-    """Resource not in terraform state should get reason_code='drift'."""
+    """Resource not in terraform state should get a drift-category reason code."""
     with db_session() as session:
         session.add(Resource(
             resource_id="arn:aws:ec2:us-east-1:123:instance/i-drift",
@@ -25,15 +25,17 @@ def test_drift_reason_code(db_session):
             in_terraform_state=False,
         ))
 
+    drift_codes = {"drift", "orphan_sdk_created", "orphan_unknown", "legacy_untracked", "non_terraform_iac"}
     summary = compute_variance("2025-01", "2025-02")
-    assert summary["by_reason"].get("drift", {}).get("count", 0) >= 1
+    # At least one drift-category reason code should appear
+    assert any(summary["by_reason"].get(code, {}).get("count", 0) >= 1 for code in drift_codes)
 
     with db_session() as session:
         vr = session.query(VarianceReport).filter_by(
             resource_id="arn:aws:ec2:us-east-1:123:instance/i-drift"
         ).first()
         assert vr is not None
-        assert vr.reason_code == "drift"
+        assert vr.reason_code in drift_codes
 
 
 def test_delta_dollars_computed(db_session):

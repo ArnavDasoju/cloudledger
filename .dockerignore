@@ -1,0 +1,12 @@
+venv/
+__pycache__/
+*.pyc
+.env
+.git/
+node_modules/
+frontend/.next/
+frontend/out/
+data/uploads/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/

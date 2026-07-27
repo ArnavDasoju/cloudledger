@@ -14,8 +14,16 @@ from cloudledger.database import Base  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def db_session(monkeypatch):
-    """Create a fresh in-memory SQLite database for each test."""
-    engine = create_engine("sqlite://", echo=False, native_datetime=True)
+    """Create a fresh in-memory SQLite database for each test.
+
+    Uses shared cache so the same in-memory db is accessible from multiple threads
+    (needed for FastAPI TestClient which runs endpoints in a thread pool).
+    """
+    engine = create_engine(
+        "sqlite:///file::memory:?cache=shared&uri=true",
+        echo=False,
+        connect_args={"check_same_thread": False},
+    )
 
     # Tell SQLite to accept date strings without conversion errors
     @event.listens_for(engine, "connect")
@@ -38,12 +46,14 @@ def db_session(monkeypatch):
             session.close()
 
     # Patch get_db everywhere it's used
+    import cloudledger.database
     import cloudledger.ingest
     import cloudledger.normalize
     import cloudledger.variance
     import cloudledger.quality
     import cloudledger.allocate
     import cloudledger.anomaly
+    monkeypatch.setattr(cloudledger.database, "get_db", _get_db)
     monkeypatch.setattr(cloudledger.ingest, "get_db", _get_db)
     monkeypatch.setattr(cloudledger.normalize, "get_db", _get_db)
     monkeypatch.setattr(cloudledger.variance, "get_db", _get_db)

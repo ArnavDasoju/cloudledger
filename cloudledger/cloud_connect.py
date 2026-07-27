@@ -139,32 +139,35 @@ def fetch_azure_costs(
     """
     import requests as req
 
-    # Get access token
-    token_url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
-    try:
-        token_resp = req.post(token_url, data={
-            "grant_type": "client_credentials",
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "scope": "https://management.azure.com/.default",
-        }, timeout=30)
-    except req.exceptions.RequestException as e:
-        raise ValueError(f"Azure auth request failed: {e}")
+    def _get_token():
+        """Obtain a fresh Azure access token."""
+        token_url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
+        try:
+            token_resp = req.post(token_url, data={
+                "grant_type": "client_credentials",
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "scope": "https://management.azure.com/.default",
+            }, timeout=30)
+        except req.exceptions.RequestException as e:
+            raise ValueError(f"Azure auth request failed: {e}")
 
-    if token_resp.status_code != 200:
-        raise ValueError(f"Azure auth failed: {token_resp.text[:300]}")
+        if token_resp.status_code != 200:
+            raise ValueError(f"Azure auth failed: {token_resp.text[:300]}")
 
-    token_data = token_resp.json()
-    if "access_token" not in token_data:
-        raise ValueError(f"Azure auth response missing access_token: {token_resp.text[:300]}")
+        token_data = token_resp.json()
+        if "access_token" not in token_data:
+            raise ValueError(f"Azure auth response missing access_token: {token_resp.text[:300]}")
 
-    access_token = token_data["access_token"]
-    headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
+        return token_data["access_token"]
 
     today = date.today().replace(day=1)
     csv_paths = []
 
     for i in range(months, 0, -1):
+        # Get a fresh token for each month to avoid expiration on long fetches
+        access_token = _get_token()
+        headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
         m = today.month - i
         y = today.year
         while m <= 0:
@@ -267,13 +270,25 @@ def fetch_azure_costs(
 
             resource_name = resource_id.split("/")[-1] if "/" in resource_id else resource_id
 
+            # Derive a friendly service name from the resource type
+            # (the MeterCategory column should contain a human-readable service name, not the raw ARM type)
+            service_name = resource_type
+            if resource_type:
+                # e.g. "Microsoft.Compute/virtualMachines" → "Virtual Machines"
+                parts = resource_type.split("/")
+                if len(parts) >= 2:
+                    service_name = parts[-1]
+                    # CamelCase to spaces: "virtualMachines" → "virtual Machines" → title case
+                    import re
+                    service_name = re.sub(r'([a-z])([A-Z])', r'\1 \2', service_name).title()
+
             writer.writerow([
                 invoice_id,
                 period_start.isoformat(),
                 period_end.isoformat(),
                 resource_id,
                 resource_name,
-                resource_type,
+                service_name,
                 "",  # location not available in this query
                 "Usage",
                 f"{cost:.6f}",

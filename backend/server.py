@@ -2,18 +2,26 @@
 
 import os
 import tempfile
+from contextlib import asynccontextmanager
 from datetime import date
 from decimal import Decimal
 
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from sqlalchemy import func, distinct, text
+from pydantic import BaseModel, Field
+from sqlalchemy import func, distinct
 
+from cloudledger.config import ALLOWED_ORIGINS, MAX_UPLOAD_SIZE_MB, ANTHROPIC_API_KEY
+import cloudledger.database as _db
 from cloudledger.database import (
-    create_all_tables, get_db,
-    RawBillingLine, Invoice, Resource, ChangeEvent, VarianceReport,
+    create_all_tables,
+    RawBillingLine, Invoice, Resource, ChangeEvent, VarianceReport, Allocation,
 )
+
+
+def get_db():
+    """Wrapper that delegates to cloudledger.database.get_db for testability."""
+    return _db.get_db()
 from cloudledger.ingest import ingest_focus_csv
 from cloudledger.normalize import normalize_invoices, normalize_resources
 from cloudledger.terraform import parse_terraform_state
@@ -24,6 +32,15 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+MAX_UPLOAD_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Create database tables on startup."""
+    create_all_tables()
+    yield
+
 
 def _parse_period(period: str) -> date:
     """Validate and parse a 'YYYY-MM' period string to a date."""
@@ -32,11 +49,11 @@ def _parse_period(period: str) -> date:
     return date.fromisoformat(f"{period}-01")
 
 
-app = FastAPI(title="CloudLedger API")
+app = FastAPI(title="CloudLedger API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -89,12 +106,9 @@ async def upload_csv(files: list[UploadFile] = File(...)):
     if len(files) > 20:
         raise HTTPException(400, "Maximum 20 CSV files allowed")
 
-    create_all_tables()
-
     # Clear all existing data so we start fresh
     with get_db() as session:
-        # Delete from tables that have foreign keys to raw_billing_lines first
-        session.execute(text("DELETE FROM allocations"))
+        session.query(Allocation).delete()
         session.query(VarianceReport).delete()
         session.query(Resource).delete()
         session.query(Invoice).delete()
@@ -104,10 +118,12 @@ async def upload_csv(files: list[UploadFile] = File(...)):
     total_skipped = 0
 
     for file in files:
-        if not file.filename.endswith(".csv"):
+        if not file.filename or not file.filename.endswith(".csv"):
             raise HTTPException(400, f"Only CSV files accepted, got: {file.filename}")
+        content = await file.read()
+        if len(content) > MAX_UPLOAD_BYTES:
+            raise HTTPException(400, f"File {file.filename} exceeds {MAX_UPLOAD_SIZE_MB}MB limit")
         with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
-            content = await file.read()
             tmp.write(content)
             tmp_path = tmp.name
         try:
@@ -115,7 +131,6 @@ async def upload_csv(files: list[UploadFile] = File(...)):
             total_inserted += stats.get("rows_inserted", 0)
             total_skipped += stats.get("rows_skipped", 0)
         except Exception as e:
-            os.unlink(tmp_path)
             logger.error("Failed to ingest %s: %s", file.filename, e)
             raise HTTPException(400, f"Failed to process {file.filename}: {str(e)}")
         finally:
@@ -132,20 +147,25 @@ async def upload_terraform(files: list[UploadFile] = File(...)):
     if len(files) > 20:
         raise HTTPException(400, "Maximum 20 files allowed")
 
-    create_all_tables()
     total_resources = 0
     tf_dir = os.path.join(UPLOAD_DIR, "terraform")
     os.makedirs(tf_dir, exist_ok=True)
 
     for i, file in enumerate(files):
-        if not file.filename.endswith((".tfstate", ".json")):
+        if not file.filename or not file.filename.endswith((".tfstate", ".json")):
             raise HTTPException(400, f"Only .tfstate or .json accepted, got: {file.filename}")
         content = await file.read()
+        if len(content) > MAX_UPLOAD_BYTES:
+            raise HTTPException(400, f"File {file.filename} exceeds {MAX_UPLOAD_SIZE_MB}MB limit")
         save_path = os.path.join(tf_dir, f"terraform_{i}.tfstate")
         with open(save_path, "wb") as f:
             f.write(content)
-        resource_map = parse_terraform_state(save_path)
-        total_resources += len(resource_map)
+        try:
+            resource_map = parse_terraform_state(save_path)
+            total_resources += len(resource_map)
+        except Exception as e:
+            logger.error("Failed to parse terraform state %s: %s", file.filename, e)
+            raise HTTPException(400, f"Invalid terraform state file: {file.filename}")
 
     return {"resources_parsed": total_resources, "files_count": len(files)}
 
@@ -154,6 +174,9 @@ async def upload_terraform(files: list[UploadFile] = File(...)):
 
 @app.post("/api/pipeline/run")
 def run_pipeline(prior_period: str, current_period: str):
+    _parse_period(prior_period)
+    _parse_period(current_period)
+
     tf_dir = os.path.join(UPLOAD_DIR, "terraform")
     tf_paths = []
     if os.path.isdir(tf_dir):
@@ -163,7 +186,6 @@ def run_pipeline(prior_period: str, current_period: str):
     normalize_resources(terraform_state_paths=tf_paths if tf_paths else None)
     result = compute_variance(prior_period, current_period)
 
-    # Convert any Decimal values in the result
     def _sanitize(obj):
         if isinstance(obj, dict):
             return {k: _sanitize(v) for k, v in obj.items()}
@@ -243,27 +265,23 @@ def ingestion_stats(current_period: str):
         tf_unmatched = [r for r in resources_current if not r.in_terraform_state]
         tf_count = len(tf_matched)
 
-        # Cost covered by terraform vs not
         tf_matched_cost = sum(_f(r.total_cost) for r in tf_matched)
         tf_unmatched_cost = sum(_f(r.total_cost) for r in tf_unmatched)
 
         # --- Data quality checks ---
-        # 1. Missing resource_id
         missing_resource_id = session.query(func.count(RawBillingLine.id)).filter(
             RawBillingLine.billing_period_start == current_date,
-            (RawBillingLine.resource_id == None) | (RawBillingLine.resource_id == ""),
+            (RawBillingLine.resource_id == None) | (RawBillingLine.resource_id == ""),  # noqa: E711
         ).scalar() or 0
 
-        # 2. Missing service_name
         missing_service = session.query(func.count(RawBillingLine.id)).filter(
             RawBillingLine.billing_period_start == current_date,
-            (RawBillingLine.service_name == None) | (RawBillingLine.service_name == ""),
+            (RawBillingLine.service_name == None) | (RawBillingLine.service_name == ""),  # noqa: E711
         ).scalar() or 0
 
-        # 3. Zero or negative cost lines
         zero_cost_lines = session.query(func.count(RawBillingLine.id)).filter(
             RawBillingLine.billing_period_start == current_date,
-            (RawBillingLine.billed_cost == 0) | (RawBillingLine.billed_cost == None),
+            (RawBillingLine.billed_cost == 0) | (RawBillingLine.billed_cost == None),  # noqa: E711
         ).scalar() or 0
 
         negative_cost_lines = session.query(func.count(RawBillingLine.id)).filter(
@@ -275,10 +293,10 @@ def ingestion_stats(current_period: str):
             RawBillingLine.billing_period_start == current_date,
         ).scalar() or 0
 
-        # --- Tag coverage: how many resources have team tags ---
+        # --- Tag coverage ---
         tagged_resources = session.query(func.count(Resource.id)).filter(
             Resource.billing_period_start == current_date,
-            Resource.team != None,
+            Resource.team != None,  # noqa: E711
             Resource.team != "",
         ).scalar() or 0
 
@@ -299,11 +317,10 @@ def ingestion_stats(current_period: str):
         )
         services = []
         for svc, cnt, cost, res_cnt in service_rows:
-            # Check how many of this service's resources are terraform-matched
             svc_tf = session.query(func.count(Resource.id)).filter(
                 Resource.billing_period_start == current_date,
                 Resource.service_name == svc,
-                Resource.in_terraform_state == True,
+                Resource.in_terraform_state == True,  # noqa: E712
             ).scalar() or 0
             services.append({
                 "service": svc or "Unknown",
@@ -368,7 +385,6 @@ def variance_by_service(current_period: str):
     current_date = _parse_period(current_period)
 
     with get_db() as session:
-        # --- Service-level aggregation (signed + absolute) ---
         svc_rows = (
             session.query(
                 VarianceReport.service_name,
@@ -394,7 +410,6 @@ def variance_by_service(current_period: str):
                 "current_cost": _f(current_sum),
             })
 
-        # --- All variance rows for resource-level detail ---
         all_rows = (
             session.query(VarianceReport)
             .filter(VarianceReport.current_period_start == current_date)
@@ -418,7 +433,6 @@ def variance_by_service(current_period: str):
                 "team": v.team,
             })
 
-        # --- Reason code summary ---
         reason_rows = (
             session.query(
                 VarianceReport.reason_code,
@@ -438,7 +452,6 @@ def variance_by_service(current_period: str):
             "count": r[3],
         } for r in reason_rows]
 
-        # --- Summary stats ---
         total_increases = sum(_f(v.delta_dollars) for v in all_rows if _f(v.delta_dollars) > 0)
         total_decreases = sum(_f(v.delta_dollars) for v in all_rows if _f(v.delta_dollars) < 0)
 
@@ -461,7 +474,6 @@ def root_causes(current_period: str):
     current_date = _parse_period(current_period)
 
     with get_db() as session:
-        # All variance rows with full detail
         all_rows = (
             session.query(VarianceReport)
             .filter(VarianceReport.current_period_start == current_date)
@@ -469,7 +481,6 @@ def root_causes(current_period: str):
             .all()
         )
 
-        # Build bucket aggregation
         buckets = {"planned": [], "drift": [], "usage": [], "edge_cases": []}
         for v in all_rows:
             rc = v.reason_code or "other"
@@ -494,9 +505,8 @@ def root_causes(current_period: str):
             elif rc in EDGE_CODES:
                 buckets["edge_cases"].append(entry)
             else:
-                buckets["drift"].append(entry)  # unknown → drift
+                buckets["drift"].append(entry)
 
-        # Granular reason code breakdown
         reason_rows = (
             session.query(
                 VarianceReport.reason_code,
@@ -541,7 +551,6 @@ def close_packet(current_period: str, prior_period: str | None = None):
     current_date = _parse_period(current_period)
 
     with get_db() as session:
-        # Current and prior invoice totals
         inv_current = session.query(Invoice).filter(Invoice.billing_period_start == current_date).first()
         total_cost = _f(inv_current.total_billed_cost) if inv_current else 0.0
 
@@ -551,7 +560,6 @@ def close_packet(current_period: str, prior_period: str | None = None):
             inv_prior = session.query(Invoice).filter(Invoice.billing_period_start == prior_date).first()
             prior_cost = _f(inv_prior.total_billed_cost) if inv_prior else 0.0
 
-        # All variance rows
         all_rows = (
             session.query(VarianceReport)
             .filter(VarianceReport.current_period_start == current_date)
@@ -559,7 +567,6 @@ def close_packet(current_period: str, prior_period: str | None = None):
             .all()
         )
 
-        # Reason code breakdown with signed + absolute + top resources
         reason_map: dict = {}
         for v in all_rows:
             rc = v.reason_code or "other"
@@ -577,7 +584,6 @@ def close_packet(current_period: str, prior_period: str | None = None):
 
         reasons = sorted(reason_map.values(), key=lambda r: r["abs_delta"], reverse=True)
 
-        # Actionable items: drift resources (need terraform import or investigation)
         drift_items = [v for v in all_rows if v.reason_code in DRIFT_CODES]
         action_items = []
         for v in sorted(drift_items, key=lambda x: abs(_f(x.delta_dollars)), reverse=True)[:5]:
@@ -589,7 +595,6 @@ def close_packet(current_period: str, prior_period: str | None = None):
                 "action": "Import to Terraform" if v.reason_code in ("orphan_unknown", "orphan_sdk_created") else "Investigate drift",
             })
 
-        # Coverage stats
         managed_count = sum(1 for v in all_rows if v.in_terraform_state)
         total_count = len(all_rows)
         managed_cost = sum(abs(_f(v.delta_dollars)) for v in all_rows if v.in_terraform_state)
@@ -652,11 +657,15 @@ def gl_export(current_period: str):
 
 @app.get("/api/close-packet/pdf")
 def close_packet_pdf(current_period: str, prior_period: str):
-    import tempfile
+    import tempfile as _tempfile
+    from starlette.background import BackgroundTask
     from fastapi.responses import FileResponse
     from cloudledger.pdf_export import generate_close_packet_pdf
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+    _parse_period(current_period)
+    _parse_period(prior_period)
+
+    with _tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
         out_path = tmp.name
 
     generate_close_packet_pdf(current_period, prior_period, out_path)
@@ -664,6 +673,7 @@ def close_packet_pdf(current_period: str, prior_period: str):
         out_path,
         media_type="application/pdf",
         filename=f"CloudLedger_Close_Packet_{current_period}.pdf",
+        background=BackgroundTask(os.unlink, out_path),
     )
 
 
@@ -690,7 +700,6 @@ def engineering_view(current_period: str):
         unmanaged_cost = sum(_f(v.current_cost) for v in unmanaged)
         total_cost = managed_cost + unmanaged_cost
 
-        # Drift resources with detail for the table
         drift_resources = []
         for v in sorted(drift, key=lambda x: abs(_f(x.delta_dollars)), reverse=True):
             drift_resources.append({
@@ -703,7 +712,6 @@ def engineering_view(current_period: str):
                 "iac_source": v.iac_source or "none",
             })
 
-        # IaC source breakdown
         source_map: dict = {}
         for v in all_rows:
             src = v.iac_source or "none"
@@ -713,7 +721,6 @@ def engineering_view(current_period: str):
             source_map[src]["cost"] += _f(v.current_cost)
         iac_sources = [{"source": k, "count": v["count"], "cost": v["cost"]} for k, v in sorted(source_map.items(), key=lambda x: -x[1]["cost"])]
 
-        # Team breakdown
         team_map: dict = {}
         for v in all_rows:
             t = v.team or "Untagged"
@@ -726,46 +733,40 @@ def engineering_view(current_period: str):
                 team_map[t]["managed"] += 1
         teams = [{"team": k, **v} for k, v in sorted(team_map.items(), key=lambda x: -x[1]["cost"])]
 
-        # Compute totals inside session
         planned_total = sum(abs(_f(v.delta_dollars)) for v in planned)
         drift_total_val = sum(abs(_f(v.delta_dollars)) for v in drift)
-        planned_count = len(planned)
-        drift_count_val = len(drift)
-        managed_count_val = len(managed)
-        unmanaged_count_val = len(unmanaged)
-        total_resources = len(all_rows)
 
     return {
-        "managed_count": managed_count_val,
-        "unmanaged_count": unmanaged_count_val,
+        "managed_count": len(managed),
+        "unmanaged_count": len(unmanaged),
         "managed_cost": managed_cost,
         "unmanaged_cost": unmanaged_cost,
         "total_cost": total_cost,
-        "planned_count": planned_count,
+        "planned_count": len(planned),
         "planned_total": planned_total,
-        "drift_count": drift_count_val,
+        "drift_count": len(drift),
         "drift_total": drift_total_val,
         "drift_resources": drift_resources,
         "iac_sources": iac_sources,
         "teams": teams,
-        "total_resources": total_resources,
+        "total_resources": len(all_rows),
     }
 
 
 # ── Cloud Account Connect ────────────────────────────────────────────────────
 
 class AWSConnectRequest(BaseModel):
-    access_key: str
-    secret_key: str
+    access_key: str = Field(min_length=16, max_length=128)
+    secret_key: str = Field(min_length=1)
     region: str = "us-east-1"
-    months: int = 2
+    months: int = Field(default=2, ge=2, le=12)
 
 class AzureConnectRequest(BaseModel):
-    subscription_id: str
-    tenant_id: str
-    client_id: str
-    client_secret: str
-    months: int = 2
+    subscription_id: str = Field(min_length=36, max_length=36)
+    tenant_id: str = Field(min_length=36, max_length=36)
+    client_id: str = Field(min_length=36, max_length=36)
+    client_secret: str = Field(min_length=1)
+    months: int = Field(default=2, ge=2, le=12)
 
 @app.post("/api/connect/aws")
 def connect_aws(req: AWSConnectRequest):
@@ -773,13 +774,11 @@ def connect_aws(req: AWSConnectRequest):
     try:
         csv_paths = fetch_aws_costs(req.access_key, req.secret_key, req.region, req.months)
     except Exception as e:
-        logger.error("AWS connect failed: %s", e)
-        raise HTTPException(400, f"Failed to fetch AWS costs: {str(e)}")
+        logger.error("AWS connect failed: %s", type(e).__name__)
+        raise HTTPException(400, f"Failed to fetch AWS costs: {_safe_error(e)}")
 
-    # Ingest the fetched CSVs
-    create_all_tables()
     with get_db() as session:
-        session.execute(text("DELETE FROM allocations"))
+        session.query(Allocation).delete()
         session.query(VarianceReport).delete()
         session.query(Resource).delete()
         session.query(Invoice).delete()
@@ -791,7 +790,8 @@ def connect_aws(req: AWSConnectRequest):
             stats = ingest_focus_csv(path)
             total_inserted += stats.get("rows_inserted", 0)
         finally:
-            os.unlink(path)
+            if os.path.exists(path):
+                os.unlink(path)
 
     return {"rows_inserted": total_inserted, "files": len(csv_paths), "provider": "AWS"}
 
@@ -807,12 +807,11 @@ def connect_azure(req: AzureConnectRequest):
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:
-        logger.error("Azure connect failed: %s", e, exc_info=True)
-        raise HTTPException(400, f"Failed to fetch Azure costs: {str(e)}")
+        logger.error("Azure connect failed: %s", type(e).__name__)
+        raise HTTPException(400, f"Failed to fetch Azure costs: {_safe_error(e)}")
 
-    create_all_tables()
     with get_db() as session:
-        session.execute(text("DELETE FROM allocations"))
+        session.query(Allocation).delete()
         session.query(VarianceReport).delete()
         session.query(Resource).delete()
         session.query(Invoice).delete()
@@ -824,9 +823,19 @@ def connect_azure(req: AzureConnectRequest):
             stats = ingest_focus_csv(path)
             total_inserted += stats.get("rows_inserted", 0)
         finally:
-            os.unlink(path)
+            if os.path.exists(path):
+                os.unlink(path)
 
     return {"rows_inserted": total_inserted, "files": len(csv_paths), "provider": "Azure"}
+
+
+def _safe_error(e: Exception) -> str:
+    """Return error message with credentials stripped."""
+    msg = str(e)
+    # Strip anything that looks like an access key or secret
+    msg = _re.sub(r'AKIA[A-Z0-9]{12,}', '[REDACTED]', msg)
+    msg = _re.sub(r'[A-Za-z0-9/+=]{40,}', '[REDACTED]', msg)
+    return msg
 
 
 # ── GitHub CI/CD Integration ──────────────────────────────────────────────────
@@ -853,7 +862,6 @@ def github_sync(billing_period: str | None = None):
     if not GITHUB_TOKEN or not GITHUB_REPO:
         raise HTTPException(400, "GITHUB_TOKEN and GITHUB_REPO must be configured in .env")
 
-    # Default to latest period
     if not billing_period:
         with get_db() as session:
             latest = session.query(func.max(RawBillingLine.billing_period_start)).scalar()
@@ -875,7 +883,6 @@ def github_sync(billing_period: str | None = None):
 @app.get("/api/trends")
 def get_trends():
     with get_db() as session:
-        # All periods with invoice totals
         inv_rows = (
             session.query(Invoice.billing_period_start, Invoice.total_billed_cost)
             .order_by(Invoice.billing_period_start)
@@ -883,7 +890,6 @@ def get_trends():
         )
         totals = [{"period": r[0].strftime("%Y-%m"), "cost": _f(r[1])} for r in inv_rows]
 
-        # Per-service per-period costs
         svc_rows = (
             session.query(
                 Resource.service_name,
@@ -906,7 +912,6 @@ def get_trends():
                 "resources": count,
             })
 
-        # Variance across all period pairs
         variance_rows = (
             session.query(
                 VarianceReport.prior_period_start,
@@ -925,7 +930,6 @@ def get_trends():
             .all()
         )
 
-        # Group by period pair
         period_variances: dict = {}
         for prior, current, reason, delta, abs_delta, count in variance_rows:
             key = f"{prior.strftime('%Y-%m')}_{current.strftime('%Y-%m')}"
@@ -944,7 +948,6 @@ def get_trends():
             period_variances[key]["net_change"] += _f(delta)
             period_variances[key]["total_variance"] += _f(abs_delta)
 
-        # Anomalies: resources with >50% change and >$500 delta
         anomaly_rows = (
             session.query(VarianceReport)
             .filter(
@@ -1009,8 +1012,6 @@ def run_pipeline_all():
 
 
 # ── Snowflake-Powered Endpoints ──────────────────────────────────────────────
-# These mirror the Postgres endpoints but read from the Snowflake warehouse.
-# The frontend checks /api/snowflake/status and uses these if Snowflake is configured.
 
 @app.get("/api/snowflake/status")
 def snowflake_status():
@@ -1072,7 +1073,7 @@ def snowflake_sync(period: str | None = None):
 import json as _json
 
 class ChatRequest(BaseModel):
-    message: str
+    message: str = Field(min_length=1, max_length=4000)
     screen: str
     screen_data: dict | None = None
     history: list[dict] = []
@@ -1081,16 +1082,14 @@ class ChatRequest(BaseModel):
 def cloudly_chat(req: ChatRequest):
     import anthropic
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key or api_key == "your-api-key-here":
+    api_key = ANTHROPIC_API_KEY
+    if not api_key:
         raise HTTPException(400, "ANTHROPIC_API_KEY not configured. Add it to .env and restart.")
 
-    # Truncate screen_data to avoid huge context
     screen_context = ""
     if req.screen_data:
         raw = _json.dumps(req.screen_data, default=str)
         if len(raw) > 40000:
-            # Truncate large arrays (like resource lists) to top 20
             truncated = {}
             for k, v in req.screen_data.items():
                 if isinstance(v, list) and len(v) > 20:
@@ -1118,19 +1117,18 @@ Guidelines:
 - When discussing costs, always use dollar amounts like **$1,234**
 - Use bullet points or numbered lists when presenting multiple findings
 - Be direct and actionable — suggest next steps when relevant
-- Cross-reference data across screens when it helps answer the question (e.g., use Ingestion data to explain Variance findings)
+- Cross-reference data across screens when it helps answer the question
 - If the data doesn't contain enough info to answer, say so clearly
 - Keep responses concise (2-4 paragraphs max unless the user asks for detail)
 - Do not make up data that isn't in the screen context
 
 Strict formatting rules:
-- NEVER use emojis — no icons, no symbols like 📊🔍✅❌🚨 etc.
+- NEVER use emojis
 - NEVER use hashtags
 - NEVER use markdown headers (no ### or ## or #)
 - Write in a professional, clean tone — like a senior consultant writing an internal memo
 - Use **bold** for emphasis, bullet points for lists, and plain text for everything else"""
 
-    # Build messages from history + new message
     messages = []
     for h in req.history:
         if h.get("role") in ("user", "assistant") and h.get("content"):
@@ -1155,8 +1153,6 @@ Strict formatting rules:
 
 
 # ── Serve frontend static files ──────────────────────────────────────────────
-# When running behind ngrok or in production, serve the Next.js build
-# from FastAPI so everything runs on a single port.
 
 import pathlib
 from fastapi.staticfiles import StaticFiles
@@ -1165,17 +1161,13 @@ from fastapi.responses import HTMLResponse
 _FRONTEND_OUT = pathlib.Path(__file__).parent.parent / "frontend" / "out"
 
 if _FRONTEND_OUT.exists():
-    # Serve static assets
     app.mount("/_next", StaticFiles(directory=str(_FRONTEND_OUT / "_next")), name="next_static")
 
-    # Catch-all: serve index.html for any non-API route
     @app.get("/{full_path:path}")
     async def serve_frontend(full_path: str):
-        # Try to serve the exact file first
         file_path = _FRONTEND_OUT / full_path
         if file_path.is_file():
             return HTMLResponse(file_path.read_text())
-        # Fallback to index.html (SPA routing)
         index = _FRONTEND_OUT / "index.html"
         if index.exists():
             return HTMLResponse(index.read_text())

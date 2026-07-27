@@ -12,7 +12,15 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 
 from cloudledger.config import DATABASE_URL
 
-engine = create_engine(DATABASE_URL, echo=False)
+_engine_kwargs = {"echo": False}
+if DATABASE_URL.startswith("postgresql"):
+    _engine_kwargs.update(
+        pool_size=10,
+        max_overflow=20,
+        pool_pre_ping=True,
+        pool_recycle=1800,
+    )
+engine = create_engine(DATABASE_URL, **_engine_kwargs)
 SessionLocal = sessionmaker(bind=engine)
 Base = declarative_base()
 
@@ -42,8 +50,8 @@ class RawBillingLine(Base):
     charge_period_end = Column(DateTime)
     service_name = Column(String(100))
     service_category = Column(String(50))
-    resource_id = Column(String(200))
-    resource_name = Column(String(200))
+    resource_id = Column(String(512))
+    resource_name = Column(String(512))
     region = Column(String(50))
     availability_zone = Column(String(50))
     charge_type = Column(String(50))
@@ -89,8 +97,8 @@ class Resource(Base):
     __tablename__ = "resources"
 
     id = Column(Integer, primary_key=True)
-    resource_id = Column(String(200), nullable=False)
-    resource_name = Column(String(200))
+    resource_id = Column(String(512), nullable=False)
+    resource_name = Column(String(512))
     service_name = Column(String(100))
     service_category = Column(String(50))
     region = Column(String(50))
@@ -117,7 +125,7 @@ class ChangeEvent(Base):
     __tablename__ = "change_events"
 
     id = Column(Integer, primary_key=True)
-    resource_id = Column(String(200))
+    resource_id = Column(String(512))
     event_type = Column(String(50))
     event_date = Column(Date)
     pr_number = Column(String(50))
@@ -135,8 +143,8 @@ class VarianceReport(Base):
     __tablename__ = "variance_report"
 
     id = Column(Integer, primary_key=True)
-    resource_id = Column(String(200))
-    resource_name = Column(String(200))
+    resource_id = Column(String(512))
+    resource_name = Column(String(512))
     service_name = Column(String(100))
     team = Column(String(100))
     cost_center = Column(String(100))
@@ -164,15 +172,36 @@ class VarianceReport(Base):
     )
 
 
+class Allocation(Base):
+    """Cost allocation — attributes each billing line to a team/cost center."""
+    __tablename__ = "allocations"
+
+    id = Column(Integer, primary_key=True)
+    billing_line_id = Column(Integer, nullable=False)
+    resource_id = Column(String(512))
+    billing_period_start = Column(Date)
+    team = Column(String(100))
+    cost_center = Column(String(100))
+    allocated_cost = Column(Numeric(18, 2))
+    attribution_method = Column(String(50))
+    confidence_score = Column(Numeric(3, 2))
+    created_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_alloc_billing_line", "billing_line_id"),
+        Index("ix_alloc_resource_id", "resource_id"),
+    )
+
+
 class LogicalResource(Base):
     """Groups related billing line items under a logical resource (e.g. EKS cluster + nodes)."""
     __tablename__ = "logical_resources"
 
     id = Column(Integer, primary_key=True)
-    logical_resource_id = Column(String(200), nullable=False)
-    logical_resource_name = Column(String(200))
+    logical_resource_id = Column(String(512), nullable=False)
+    logical_resource_name = Column(String(512))
     resource_type = Column(String(50))
-    child_resource_id = Column(String(200), nullable=False)
+    child_resource_id = Column(String(512), nullable=False)
     relationship = Column(String(50))
     billing_period_start = Column(Date)
 

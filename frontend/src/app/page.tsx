@@ -287,7 +287,7 @@ function UploadScreen({ files, setFiles, onDone }: {
       } else {
         await api.runPipeline(periods[1], periods[0]);
       }
-      onDone(periods[periods.length - 1], periods[periods.length - 2], periods);
+      onDone(periods[1], periods[0], periods);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Pipeline failed");
       setRunning(false);
@@ -314,7 +314,7 @@ function UploadScreen({ files, setFiles, onDone }: {
       if (periods.length < 2) { setError("Could not detect billing periods."); setRunning(false); setStep(0); return; }
       setStep(4);
       if (periods.length > 2) { await api.runPipelineAll(); } else { await api.runPipeline(periods[1], periods[0]); }
-      onDone(periods[periods.length - 1], periods[periods.length - 2], periods);
+      onDone(periods[1], periods[0], periods);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Connection failed");
       setRunning(false);
