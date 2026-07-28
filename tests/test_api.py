@@ -33,7 +33,20 @@ def client(db_session, monkeypatch):
     monkeypatch.setattr(server_mod, "create_all_tables", lambda: None)
 
     from backend.server import app
-    with TestClient(app) as tc:
+    from backend.auth import create_token
+
+    # Create a test user directly in the DB so we don't need the register endpoint
+    from cloudledger.database import User
+    from backend.auth import hash_password as _hash
+    with db_session() as session:
+        user = User(email="test@example.com", password_hash=_hash("testpass123"), name="Test")
+        session.add(user)
+        session.flush()
+        uid = user.id
+
+    token = create_token(uid, "test@example.com")
+
+    with TestClient(app, headers={"Authorization": f"Bearer {token}"}) as tc:
         yield tc
 
 
@@ -59,6 +72,7 @@ def _seed_full_pipeline(db_session):
 
             for i in range(5):
                 session.add(RawBillingLine(
+                    user_id=1,
                     invoice_id=invoice_id,
                     billing_period_start=period_start,
                     billing_period_end=date(period_start.year, period_start.month, 28),

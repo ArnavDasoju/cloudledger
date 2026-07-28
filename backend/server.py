@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from datetime import date
 from decimal import Decimal
 
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy import func, distinct
@@ -14,8 +14,11 @@ from sqlalchemy import func, distinct
 from cloudledger.config import ALLOWED_ORIGINS, MAX_UPLOAD_SIZE_MB, ANTHROPIC_API_KEY
 import cloudledger.database as _db
 from cloudledger.database import (
-    create_all_tables,
+    create_all_tables, User,
     RawBillingLine, Invoice, Resource, ChangeEvent, VarianceReport, Allocation,
+)
+from backend.auth import (
+    hash_password, verify_password, create_token, get_current_user_id,
 )
 
 
@@ -96,13 +99,68 @@ def health():
     return {"status": "ok"}
 
 
+# ── Auth ─────────────────────────────────────────────────────────────────────
+
+class RegisterRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=255)
+    password: str = Field(min_length=6, max_length=128)
+    name: str = Field(default="", max_length=200)
+
+class LoginRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=255)
+    password: str = Field(min_length=1)
+
+@app.post("/api/auth/register")
+def register(req: RegisterRequest):
+    with get_db() as session:
+        existing = session.query(User).filter(User.email == req.email).first()
+        if existing:
+            raise HTTPException(400, "An account with this email already exists.")
+        user = User(
+            email=req.email.lower().strip(),
+            password_hash=hash_password(req.password),
+            name=req.name.strip(),
+        )
+        session.add(user)
+        session.flush()  # get the id
+        token = create_token(user.id, user.email)
+    return {"token": token, "email": req.email.lower().strip(), "name": req.name.strip()}
+
+@app.post("/api/auth/login")
+def login(req: LoginRequest):
+    with get_db() as session:
+        user = session.query(User).filter(User.email == req.email.lower().strip()).first()
+        if not user or not verify_password(req.password, user.password_hash):
+            raise HTTPException(401, "Invalid email or password.")
+        token = create_token(user.id, user.email)
+    return {"token": token, "email": user.email, "name": user.name or ""}
+
+@app.get("/api/auth/me")
+def auth_me(request: Request):
+    user_id = get_current_user_id(request)
+    with get_db() as session:
+        user = session.query(User).filter(User.id == user_id).first()
+        if not user:
+            raise HTTPException(401, "User not found")
+    return {"user_id": user.id, "email": user.email, "name": user.name or ""}
+
+
+# ── Helper: get user_id from request (returns None for unauthenticated) ──────
+
+def _uid(request: Request) -> int:
+    """Extract and validate user_id from JWT. Used by all data endpoints."""
+    return get_current_user_id(request)
+
+
 # ── Periods ──────────────────────────────────────────────────────────────────
 
 @app.get("/api/periods")
-def get_periods():
+def get_periods(request: Request):
+    uid = _uid(request)
     with get_db() as session:
         rows = (
             session.query(distinct(RawBillingLine.billing_period_start))
+            .filter(RawBillingLine.user_id == uid)
             .order_by(RawBillingLine.billing_period_start.desc())
             .all()
         )
@@ -113,17 +171,18 @@ def get_periods():
 # ── Upload billing CSVs ─────────────────────────────────────────────────────
 
 @app.post("/api/upload")
-async def upload_csv(files: list[UploadFile] = File(...)):
+async def upload_csv(request: Request, files: list[UploadFile] = File(...)):
+    uid = _uid(request)
     if len(files) > 20:
         raise HTTPException(400, "Maximum 20 CSV files allowed")
 
-    # Clear all existing data so we start fresh
+    # Clear this user's existing data so we start fresh
     with get_db() as session:
-        session.query(Allocation).delete()
-        session.query(VarianceReport).delete()
-        session.query(Resource).delete()
-        session.query(Invoice).delete()
-        session.query(RawBillingLine).delete()
+        session.query(Allocation).filter(Allocation.user_id == uid).delete()
+        session.query(VarianceReport).filter(VarianceReport.user_id == uid).delete()
+        session.query(Resource).filter(Resource.user_id == uid).delete()
+        session.query(Invoice).filter(Invoice.user_id == uid).delete()
+        session.query(RawBillingLine).filter(RawBillingLine.user_id == uid).delete()
 
     total_inserted = 0
     total_skipped = 0
@@ -154,7 +213,8 @@ async def upload_csv(files: list[UploadFile] = File(...)):
 # ── Upload Terraform state ──────────────────────────────────────────────────
 
 @app.post("/api/upload/terraform")
-async def upload_terraform(files: list[UploadFile] = File(...)):
+async def upload_terraform(request: Request, files: list[UploadFile] = File(...)):
+    _uid(request)  # validate auth
     if len(files) > 20:
         raise HTTPException(400, "Maximum 20 files allowed")
 
@@ -184,7 +244,8 @@ async def upload_terraform(files: list[UploadFile] = File(...)):
 # ── Run pipeline ─────────────────────────────────────────────────────────────
 
 @app.post("/api/pipeline/run")
-def run_pipeline(prior_period: str, current_period: str):
+def run_pipeline(request: Request, prior_period: str, current_period: str):
+    _uid(request)
     _parse_period(prior_period)
     _parse_period(current_period)
 
@@ -212,7 +273,8 @@ def run_pipeline(prior_period: str, current_period: str):
 # ── Screen 1: Bill overview ─────────────────────────────────────────────────
 
 @app.get("/api/bill-overview")
-def bill_overview(prior_period: str, current_period: str):
+def bill_overview(request: Request, prior_period: str, current_period: str):
+    _uid(request)
     prior_date = _parse_period(prior_period)
     current_date = _parse_period(current_period)
 
@@ -238,7 +300,8 @@ def bill_overview(prior_period: str, current_period: str):
 # ── Screen 2: Ingestion stats ───────────────────────────────────────────────
 
 @app.get("/api/ingestion-stats")
-def ingestion_stats(current_period: str):
+def ingestion_stats(request: Request, current_period: str):
+    _uid(request)
     current_date = _parse_period(current_period)
 
     with get_db() as session:
@@ -392,7 +455,8 @@ def ingestion_stats(current_period: str):
 # ── Screen 3: Variance by service ───────────────────────────────────────────
 
 @app.get("/api/variance-by-service")
-def variance_by_service(current_period: str):
+def variance_by_service(request: Request, current_period: str):
+    _uid(request)
     current_date = _parse_period(current_period)
 
     with get_db() as session:
@@ -481,7 +545,8 @@ def variance_by_service(current_period: str):
 # ── Screen 4: Root causes ───────────────────────────────────────────────────
 
 @app.get("/api/root-causes")
-def root_causes(current_period: str):
+def root_causes(request: Request, current_period: str):
+    _uid(request)
     current_date = _parse_period(current_period)
 
     with get_db() as session:
@@ -558,7 +623,8 @@ def root_causes(current_period: str):
 # ── Screen 5: Close packet ──────────────────────────────────────────────────
 
 @app.get("/api/close-packet")
-def close_packet(current_period: str, prior_period: str | None = None):
+def close_packet(request: Request, current_period: str, prior_period: str | None = None):
+    _uid(request)
     current_date = _parse_period(current_period)
 
     with get_db() as session:
@@ -629,7 +695,8 @@ def close_packet(current_period: str, prior_period: str | None = None):
 # ── GL Export ────────────────────────────────────────────────────────────────
 
 @app.get("/api/gl-export")
-def gl_export(current_period: str):
+def gl_export(request: Request, current_period: str):
+    _uid(request)
     import csv
     import io
     from fastapi.responses import StreamingResponse
@@ -667,7 +734,8 @@ def gl_export(current_period: str):
 # ── PDF Export ────────────────────────────────────────────────────────────────
 
 @app.get("/api/close-packet/pdf")
-def close_packet_pdf(current_period: str, prior_period: str):
+def close_packet_pdf(request: Request, current_period: str, prior_period: str):
+    _uid(request)
     import tempfile as _tempfile
     from starlette.background import BackgroundTask
     from fastapi.responses import FileResponse
@@ -691,7 +759,8 @@ def close_packet_pdf(current_period: str, prior_period: str):
 # ── Screen 6: Engineering view ───────────────────────────────────────────────
 
 @app.get("/api/engineering-view")
-def engineering_view(current_period: str):
+def engineering_view(request: Request, current_period: str):
+    _uid(request)
     current_date = _parse_period(current_period)
 
     with get_db() as session:
@@ -780,7 +849,8 @@ class AzureConnectRequest(BaseModel):
     months: int = Field(default=2, ge=2, le=12)
 
 @app.post("/api/connect/aws")
-def connect_aws(req: AWSConnectRequest):
+def connect_aws(request: Request, req: AWSConnectRequest):
+    uid = _uid(request)
     from cloudledger.cloud_connect import fetch_aws_costs
     try:
         csv_paths = fetch_aws_costs(req.access_key, req.secret_key, req.region, req.months)
@@ -789,11 +859,11 @@ def connect_aws(req: AWSConnectRequest):
         raise HTTPException(400, f"Failed to fetch AWS costs: {_safe_error(e)}")
 
     with get_db() as session:
-        session.query(Allocation).delete()
-        session.query(VarianceReport).delete()
-        session.query(Resource).delete()
-        session.query(Invoice).delete()
-        session.query(RawBillingLine).delete()
+        session.query(Allocation).filter(Allocation.user_id == uid).delete()
+        session.query(VarianceReport).filter(VarianceReport.user_id == uid).delete()
+        session.query(Resource).filter(Resource.user_id == uid).delete()
+        session.query(Invoice).filter(Invoice.user_id == uid).delete()
+        session.query(RawBillingLine).filter(RawBillingLine.user_id == uid).delete()
 
     total_inserted = 0
     for path in csv_paths:
@@ -807,7 +877,8 @@ def connect_aws(req: AWSConnectRequest):
     return {"rows_inserted": total_inserted, "files": len(csv_paths), "provider": "AWS"}
 
 @app.post("/api/connect/azure")
-def connect_azure(req: AzureConnectRequest):
+def connect_azure(request: Request, req: AzureConnectRequest):
+    uid = _uid(request)
     from cloudledger.cloud_connect import fetch_azure_costs
     try:
         csv_paths = fetch_azure_costs(req.subscription_id, req.tenant_id, req.client_id, req.client_secret, req.months)
@@ -822,11 +893,11 @@ def connect_azure(req: AzureConnectRequest):
         raise HTTPException(400, f"Failed to fetch Azure costs: {_safe_error(e)}")
 
     with get_db() as session:
-        session.query(Allocation).delete()
-        session.query(VarianceReport).delete()
-        session.query(Resource).delete()
-        session.query(Invoice).delete()
-        session.query(RawBillingLine).delete()
+        session.query(Allocation).filter(Allocation.user_id == uid).delete()
+        session.query(VarianceReport).filter(VarianceReport.user_id == uid).delete()
+        session.query(Resource).filter(Resource.user_id == uid).delete()
+        session.query(Invoice).filter(Invoice.user_id == uid).delete()
+        session.query(RawBillingLine).filter(RawBillingLine.user_id == uid).delete()
 
     total_inserted = 0
     for path in csv_paths:
@@ -852,7 +923,8 @@ def _safe_error(e: Exception) -> str:
 # ── GitHub CI/CD Integration ──────────────────────────────────────────────────
 
 @app.get("/api/github/status")
-def github_status():
+def github_status(request: Request):
+    _uid(request)
     from cloudledger.config import GITHUB_TOKEN, GITHUB_REPO
     configured = bool(GITHUB_TOKEN and GITHUB_REPO)
     event_count = 0
@@ -868,7 +940,8 @@ def github_status():
     }
 
 @app.post("/api/github/sync")
-def github_sync(billing_period: str | None = None):
+def github_sync(request: Request, billing_period: str | None = None):
+    _uid(request)
     from cloudledger.config import GITHUB_TOKEN, GITHUB_REPO
     if not GITHUB_TOKEN or not GITHUB_REPO:
         raise HTTPException(400, "GITHUB_TOKEN and GITHUB_REPO must be configured in .env")
@@ -892,7 +965,8 @@ def github_sync(billing_period: str | None = None):
 # ── Historical Trends ────────────────────────────────────────────────────────
 
 @app.get("/api/trends")
-def get_trends():
+def get_trends(request: Request):
+    _uid(request)
     with get_db() as session:
         inv_rows = (
             session.query(Invoice.billing_period_start, Invoice.total_billed_cost)
@@ -987,7 +1061,8 @@ def get_trends():
 
 
 @app.post("/api/pipeline/run-all")
-def run_pipeline_all():
+def run_pipeline_all(request: Request):
+    _uid(request)
     """Run variance for all consecutive period pairs."""
     tf_dir = os.path.join(UPLOAD_DIR, "terraform")
     tf_paths = []
@@ -1090,7 +1165,8 @@ class ChatRequest(BaseModel):
     history: list[dict] = []
 
 @app.post("/api/chat")
-def cloudly_chat(req: ChatRequest):
+def cloudly_chat(request: Request, req: ChatRequest):
+    _uid(request)
     import anthropic
 
     api_key = ANTHROPIC_API_KEY

@@ -6,9 +6,9 @@ Five tables only: raw_billing_lines, invoices, resources, change_events, varianc
 from contextlib import contextmanager
 from sqlalchemy import (
     create_engine, Column, Integer, String, Date, DateTime, Numeric,
-    Boolean, Text, JSON, UniqueConstraint, Index, func,
+    Boolean, Text, JSON, UniqueConstraint, Index, ForeignKey, func,
 )
-from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 
 from cloudledger.config import DATABASE_URL
 
@@ -38,11 +38,23 @@ def get_db():
         session.close()
 
 
+class User(Base):
+    """Registered user — owns all billing data via user_id foreign keys."""
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True)
+    email = Column(String(255), unique=True, nullable=False, index=True)
+    password_hash = Column(String(255), nullable=False)
+    name = Column(String(200))
+    created_at = Column(DateTime, server_default=func.now())
+
+
 class RawBillingLine(Base):
     """One row per charge line from FOCUS 1.2 CSV exports."""
     __tablename__ = "raw_billing_lines"
 
     id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     invoice_id = Column(String(50))
     billing_period_start = Column(Date)
     billing_period_end = Column(Date)
@@ -78,7 +90,8 @@ class Invoice(Base):
     __tablename__ = "invoices"
 
     id = Column(Integer, primary_key=True)
-    invoice_id = Column(String(50), unique=True, nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    invoice_id = Column(String(50), nullable=False)
     billing_period_start = Column(Date, nullable=False)
     billing_period_end = Column(Date, nullable=False)
     provider = Column(String(20), default="AWS")
@@ -97,6 +110,7 @@ class Resource(Base):
     __tablename__ = "resources"
 
     id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     resource_id = Column(String(512), nullable=False)
     resource_name = Column(String(512))
     service_name = Column(String(100))
@@ -113,7 +127,7 @@ class Resource(Base):
     total_cost = Column(Numeric(18, 2))
 
     __table_args__ = (
-        UniqueConstraint("resource_id", "billing_period_start"),
+        UniqueConstraint("user_id", "resource_id", "billing_period_start"),
         Index("ix_resource_billing_period", "billing_period_start"),
         Index("ix_resource_resource_id", "resource_id"),
         Index("ix_resource_in_terraform", "in_terraform_state"),
@@ -125,6 +139,7 @@ class ChangeEvent(Base):
     __tablename__ = "change_events"
 
     id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     resource_id = Column(String(512))
     event_type = Column(String(50))
     event_date = Column(Date)
@@ -143,6 +158,7 @@ class VarianceReport(Base):
     __tablename__ = "variance_report"
 
     id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     resource_id = Column(String(512))
     resource_name = Column(String(512))
     service_name = Column(String(100))
@@ -167,7 +183,7 @@ class VarianceReport(Base):
     created_at = Column(DateTime, server_default=func.now())
 
     __table_args__ = (
-        UniqueConstraint("resource_id", "prior_period_start", "current_period_start"),
+        UniqueConstraint("user_id", "resource_id", "prior_period_start", "current_period_start"),
         Index("ix_variance_reason_code", "reason_code"),
     )
 
@@ -177,6 +193,7 @@ class Allocation(Base):
     __tablename__ = "allocations"
 
     id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     billing_line_id = Column(Integer, nullable=False)
     resource_id = Column(String(512))
     billing_period_start = Column(Date)

@@ -2165,6 +2165,108 @@ function ContextRibbon({ screen, prior, current }: { screen: number; prior: stri
   );
 }
 
+/* ═══ Auth Gate ═════════════════════════════════════════════════════════════ */
+
+function AuthGate({ children }: { children: React.ReactNode }) {
+  const [token, setToken] = useState<string | null>(null);
+  const [checking, setChecking] = useState(true);
+  const [mode, setMode] = useState<"login" | "register">("login");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [name, setName] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const t = localStorage.getItem("cl_token");
+    setToken(t);
+    setChecking(false);
+  }, []);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setLoading(true);
+    try {
+      const result = mode === "register"
+        ? await api.register(email, password, name)
+        : await api.login(email, password);
+      localStorage.setItem("cl_token", result.token);
+      setToken(result.token);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Something went wrong");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  if (checking) return null;
+
+  if (!token) {
+    return (
+      <div className="min-h-screen flex items-center justify-center" style={{ background: C.bg }}>
+        <div className="w-full max-w-sm">
+          <div className="flex items-center justify-center gap-2 mb-8">
+            <svg width="24" height="20" viewBox="0 0 120 85" fill="none">
+              <path d="M30 65C18 65 10 57 10 47c0-9 6-16 14-18 0-14 12-24 26-24 11 0 20 6 24 15 2-1 5-2 8-2 10 0 18 8 18 18h2c8 0 14 6 14 14s-6 14-14 14H30z"
+                stroke={C.accent} strokeWidth="4" fill="none" />
+            </svg>
+            <span className="text-lg font-semibold" style={{ color: C.accent }}>CloudLedger</span>
+          </div>
+
+          <Card>
+            <div className="flex gap-1 p-1 rounded-lg mb-5" style={{ background: C.bg }}>
+              <button onClick={() => { setMode("login"); setError(null); }}
+                className="flex-1 py-1.5 rounded-md text-xs font-medium cursor-pointer"
+                style={{ background: mode === "login" ? C.card : "transparent", color: mode === "login" ? C.text : C.muted, border: "none" }}>
+                Sign In
+              </button>
+              <button onClick={() => { setMode("register"); setError(null); }}
+                className="flex-1 py-1.5 rounded-md text-xs font-medium cursor-pointer"
+                style={{ background: mode === "register" ? C.card : "transparent", color: mode === "register" ? C.text : C.muted, border: "none" }}>
+                Create Account
+              </button>
+            </div>
+
+            <form onSubmit={handleSubmit} className="space-y-3">
+              {mode === "register" && (
+                <div>
+                  <label className="text-[10px] font-medium mb-1 block" style={{ color: C.muted }}>Name</label>
+                  <input value={name} onChange={e => setName(e.target.value)} placeholder="Your name"
+                    className="w-full px-3 py-2 rounded-lg text-xs outline-none"
+                    style={{ border: `1px solid ${C.border}`, color: C.text, background: C.bg }} />
+                </div>
+              )}
+              <div>
+                <label className="text-[10px] font-medium mb-1 block" style={{ color: C.muted }}>Email</label>
+                <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@company.com" required
+                  className="w-full px-3 py-2 rounded-lg text-xs outline-none"
+                  style={{ border: `1px solid ${C.border}`, color: C.text, background: C.bg }} />
+              </div>
+              <div>
+                <label className="text-[10px] font-medium mb-1 block" style={{ color: C.muted }}>Password</label>
+                <input type="password" value={password} onChange={e => setPassword(e.target.value)}
+                  placeholder={mode === "register" ? "At least 6 characters" : "Your password"} required
+                  className="w-full px-3 py-2 rounded-lg text-xs outline-none"
+                  style={{ border: `1px solid ${C.border}`, color: C.text, background: C.bg }} />
+              </div>
+              {error && <p className="text-xs" style={{ color: C.red }}>{error}</p>}
+              <button type="submit" disabled={loading}
+                className="w-full py-2.5 rounded-lg text-sm font-semibold cursor-pointer disabled:opacity-50"
+                style={{ background: C.accent, color: "#FFFFFF", border: "none" }}>
+                {loading ? "..." : mode === "register" ? "Create Account" : "Sign In"}
+              </button>
+            </form>
+          </Card>
+        </div>
+      </div>
+    );
+  }
+
+  return <>{children}</>;
+}
+
+
 /* ═══ Main App ══════════════════════════════════════════════════════════════ */
 
 export default function Home() {
@@ -2321,6 +2423,7 @@ If you discover a security vulnerability, please report it to your CloudLedger a
   // Landing page — no nav bar, standalone
   if (screen === -1) {
     return (
+      <AuthGate>
       <div className="min-h-screen px-6 py-4 flex flex-col" style={{ background: C.bg }}>
         <MeshBackground />
         <div className="max-w-[960px] mx-auto flex-1 w-full relative" style={{ zIndex: 1 }}>
@@ -2357,10 +2460,12 @@ If you discover a security vulnerability, please report it to your CloudLedger a
           </div>
         )}
       </div>
+      </AuthGate>
     );
   }
 
   return (
+    <AuthGate>
     <div className="min-h-screen px-6 py-4 flex flex-col" style={{ background: C.bg }}>
       <MeshBackground />
       <div className="max-w-[1200px] mx-auto flex-1 w-full relative" style={{ zIndex: 1 }}>
@@ -2408,5 +2513,6 @@ If you discover a security vulnerability, please report it to your CloudLedger a
       />
       {toast.el}
     </div>
+    </AuthGate>
   );
 }

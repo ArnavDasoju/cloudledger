@@ -1,7 +1,19 @@
 const API = process.env.NEXT_PUBLIC_API_URL || "";
 
+function authHeaders(): Record<string, string> {
+  const token = typeof window !== "undefined" ? localStorage.getItem("cl_token") : null;
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 async function get<T>(path: string): Promise<T> {
-  const res = await fetch(`${API}${path}`);
+  const res = await fetch(`${API}${path}`, { headers: authHeaders() });
+  if (res.status === 401) {
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("cl_token");
+      window.location.reload();
+    }
+    throw new Error("Session expired");
+  }
   if (!res.ok) throw new Error(`API ${res.status}`);
   return res.json();
 }
@@ -13,7 +25,7 @@ export const api = {
   uploadCSV: async (files: File[]) => {
     const form = new FormData();
     for (const f of files) form.append("files", f);
-    const res = await fetch(`${API}/api/upload`, { method: "POST", body: form });
+    const res = await fetch(`${API}/api/upload`, { method: "POST", body: form, headers: authHeaders() });
     if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
     return res.json() as Promise<{ rows_inserted: number; rows_skipped: number; files_count: number }>;
   },
@@ -21,13 +33,13 @@ export const api = {
   uploadTerraform: async (files: File[]) => {
     const form = new FormData();
     for (const f of files) form.append("files", f);
-    const res = await fetch(`${API}/api/upload/terraform`, { method: "POST", body: form });
+    const res = await fetch(`${API}/api/upload/terraform`, { method: "POST", body: form, headers: authHeaders() });
     if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
     return res.json() as Promise<{ resources_parsed: number; files_count: number }>;
   },
 
   runPipeline: (prior: string, current: string) =>
-    fetch(`${API}/api/pipeline/run?prior_period=${prior}&current_period=${current}`, { method: "POST" })
+    fetch(`${API}/api/pipeline/run?prior_period=${prior}&current_period=${current}`, { method: "POST", headers: authHeaders() })
       .then(r => { if (!r.ok) throw new Error(`Pipeline failed: ${r.status}`); return r.json(); }),
 
   getBillOverview: (prior: string, current: string) =>
@@ -108,20 +120,20 @@ export const api = {
 
   syncGithub: async (period?: string) => {
     const url = period ? `${API}/api/github/sync?billing_period=${period}` : `${API}/api/github/sync`;
-    const res = await fetch(url, { method: "POST" });
+    const res = await fetch(url, { method: "POST", headers: authHeaders() });
     if (!res.ok) throw new Error(`GitHub sync failed: ${res.status}`);
     return res.json() as Promise<{ prs_found: number; tf_prs: number; events_created: number; resources_matched: number }>;
   },
 
   runPipelineAll: async () => {
-    const res = await fetch(`${API}/api/pipeline/run-all`, { method: "POST" });
+    const res = await fetch(`${API}/api/pipeline/run-all`, { method: "POST", headers: authHeaders() });
     if (!res.ok) throw new Error(`Pipeline failed: ${res.status}`);
     return res.json() as Promise<{ periods: string[]; variance_runs: number }>;
   },
 
   connectAWS: async (accessKey: string, secretKey: string, region: string, months: number) => {
     const res = await fetch(`${API}/api/connect/aws`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
+      method: "POST", headers: { "Content-Type": "application/json", ...authHeaders() },
       body: JSON.stringify({ access_key: accessKey, secret_key: secretKey, region, months }),
     });
     if (!res.ok) { const t = await res.text(); throw new Error(t || `AWS connect failed: ${res.status}`); }
@@ -130,7 +142,7 @@ export const api = {
 
   connectAzure: async (subscriptionId: string, tenantId: string, clientId: string, clientSecret: string, months: number) => {
     const res = await fetch(`${API}/api/connect/azure`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
+      method: "POST", headers: { "Content-Type": "application/json", ...authHeaders() },
       body: JSON.stringify({ subscription_id: subscriptionId, tenant_id: tenantId, client_id: clientId, client_secret: clientSecret, months }),
     });
     if (!res.ok) { const t = await res.text(); throw new Error(t || `Azure connect failed: ${res.status}`); }
@@ -141,10 +153,28 @@ export const api = {
   pdfExportUrl: (current: string, prior: string) =>
     `${API}/api/close-packet/pdf?current_period=${current}&prior_period=${prior}`,
 
+  register: async (email: string, password: string, name: string) => {
+    const res = await fetch(`${API}/api/auth/register`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password, name }),
+    });
+    if (!res.ok) { const t = await res.json().catch(() => ({})); throw new Error(t.detail || `Register failed: ${res.status}`); }
+    return res.json() as Promise<{ token: string; email: string; name: string }>;
+  },
+
+  login: async (email: string, password: string) => {
+    const res = await fetch(`${API}/api/auth/login`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    });
+    if (!res.ok) { const t = await res.json().catch(() => ({})); throw new Error(t.detail || `Login failed: ${res.status}`); }
+    return res.json() as Promise<{ token: string; email: string; name: string }>;
+  },
+
   sendChat: async (message: string, screen: string, screenData: unknown, history: { role: string; content: string }[]) => {
     const res = await fetch(`${API}/api/chat`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...authHeaders() },
       body: JSON.stringify({ message, screen, screen_data: screenData, history }),
     });
     if (!res.ok) {
