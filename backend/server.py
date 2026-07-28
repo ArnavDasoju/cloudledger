@@ -1154,6 +1154,57 @@ def snowflake_sync(period: str | None = None):
         raise HTTPException(400, f"Snowflake sync failed: {str(e)}")
 
 
+# ── AI: Narrative ─────────────────────────────────────────────────────────────
+
+@app.get("/api/narrative")
+def get_narrative(request: Request, current_period: str, prior_period: str):
+    _uid(request)
+    _parse_period(current_period)
+    _parse_period(prior_period)
+
+    # Reuse the close packet data
+    cp_data = close_packet(request, current_period, prior_period)
+
+    from backend.narrative import generate_narrative
+    try:
+        text = generate_narrative(cp_data)
+        return {"narrative": text}
+    except Exception as e:
+        logger.error("Narrative generation failed: %s", e)
+        raise HTTPException(500, "Failed to generate narrative.")
+
+
+# ── AI: Forecast ──────────────────────────────────────────────────────────────
+
+@app.get("/api/forecast")
+def get_forecast(request: Request):
+    _uid(request)
+    from backend.forecast import forecast_total, forecast_by_service
+    try:
+        total = forecast_total()
+        by_service = forecast_by_service()
+        return {"total": total, "by_service": by_service}
+    except Exception as e:
+        logger.error("Forecast failed: %s", e)
+        raise HTTPException(500, f"Forecast failed: {str(e)}")
+
+
+# ── AI: Anomaly Alerts ────────────────────────────────────────────────────────
+
+@app.get("/api/anomalies")
+def get_anomalies(request: Request, current_period: str,
+                  min_delta_pct: float = 50, min_delta_dollars: float = 500):
+    _uid(request)
+    _parse_period(current_period)
+    from cloudledger.anomaly import detect_anomalies, anomaly_summary
+    anomalies = detect_anomalies(current_period, min_delta_pct, min_delta_dollars)
+    summary = anomaly_summary(anomalies)
+    return {
+        "anomalies": anomalies[:20],
+        "summary": summary,
+    }
+
+
 # ── Cloudly Chat ─────────────────────────────────────────────────────────────
 
 import json as _json
@@ -1200,6 +1251,7 @@ def cloudly_chat(request: Request, req: ChatRequest):
         return {
             "reply": result["answer"],
             "sources": result.get("sources", []),
+            "tools_used": result.get("tools_used", []),
         }
     except anthropic.AuthenticationError:
         raise HTTPException(401, "Invalid ANTHROPIC_API_KEY. Check your .env file.")

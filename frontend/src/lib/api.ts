@@ -153,6 +153,20 @@ export const api = {
   pdfExportUrl: (current: string, prior: string) =>
     `${API}/api/close-packet/pdf?current_period=${current}&prior_period=${prior}`,
 
+  getNarrative: (current: string, prior: string) =>
+    get<{ narrative: string }>(`/api/narrative?current_period=${current}&prior_period=${prior}`),
+
+  getForecast: () => get<{
+    total: { forecast: number | null; confidence: string; r_squared: number; trend_pct: number; periods_used: number; history: { period: string; actual: number }[] };
+    by_service: { service: string; forecast: number; current: number; trend_pct: number; periods_used: number }[];
+  }>("/api/forecast"),
+
+  getAnomalies: (current: string) =>
+    get<{
+      anomalies: { resource_id: string; resource_name: string; service: string; delta: number; delta_pct: number; reason_code: string; team: string | null; severity: number }[];
+      summary: { count: number; total_impact: number; top_service: string | null; top_team: string | null };
+    }>(`/api/anomalies?current_period=${current}`),
+
   register: async (email: string, password: string, name: string) => {
     const res = await fetch(`${API}/api/auth/register`, {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -184,6 +198,7 @@ export const api = {
     return res.json() as Promise<{
       reply: string;
       sources?: { source: string; section: string; snippet: string }[];
+      tools_used?: string[];
     }>;
   },
 };
