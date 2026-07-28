@@ -1086,6 +1086,7 @@ def cloudly_chat(req: ChatRequest):
     if not api_key:
         raise HTTPException(400, "ANTHROPIC_API_KEY not configured. Add it to .env and restart.")
 
+    # Truncate screen_data for context window
     screen_context = ""
     if req.screen_data:
         raw = _json.dumps(req.screen_data, default=str)
@@ -1101,50 +1102,18 @@ def cloudly_chat(req: ChatRequest):
         else:
             screen_context = raw
 
-    system_prompt = f"""You are Cloudly, an AI assistant embedded in CloudLedger — a cloud billing variance analysis tool.
-
-You help solutions architects and finance controllers understand their cloud billing data. You are concise, specific, and always reference the actual data when answering.
-
-The user is currently viewing the "{req.screen}" screen. You have access to data from ALL screens in the application, not just the current one. Use data from any screen to give the most complete answer.
-
-<screen_data>
-{screen_context}
-</screen_data>
-
-Guidelines:
-- **Bold important numbers, resource names, and key findings** using **markdown bold** so they stand out
-- Reference specific numbers, resource names, and services from the data
-- When discussing costs, always use dollar amounts like **$1,234**
-- Use bullet points or numbered lists when presenting multiple findings
-- Be direct and actionable — suggest next steps when relevant
-- Cross-reference data across screens when it helps answer the question
-- If the data doesn't contain enough info to answer, say so clearly
-- Keep responses concise (2-4 paragraphs max unless the user asks for detail)
-- Do not make up data that isn't in the screen context
-
-Strict formatting rules:
-- NEVER use emojis
-- NEVER use hashtags
-- NEVER use markdown headers (no ### or ## or #)
-- Write in a professional, clean tone — like a senior consultant writing an internal memo
-- Use **bold** for emphasis, bullet points for lists, and plain text for everything else"""
-
-    messages = []
-    for h in req.history:
-        if h.get("role") in ("user", "assistant") and h.get("content"):
-            messages.append({"role": h["role"], "content": h["content"]})
-    messages.append({"role": "user", "content": req.message})
-
     try:
-        client = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=1024,
-            system=system_prompt,
-            messages=messages,
+        from backend.agent import ask
+        result = ask(
+            question=req.message,
+            screen=req.screen,
+            screen_data=screen_context,
+            history=req.history,
         )
-        reply = response.content[0].text if response.content else "No response generated."
-        return {"reply": reply}
+        return {
+            "reply": result["answer"],
+            "sources": result.get("sources", []),
+        }
     except anthropic.AuthenticationError:
         raise HTTPException(401, "Invalid ANTHROPIC_API_KEY. Check your .env file.")
     except Exception as e:
