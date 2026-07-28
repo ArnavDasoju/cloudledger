@@ -41,9 +41,8 @@ async def lifespan(app: FastAPI):
     create_all_tables()
     # Auto-ingest docs if the vector store is empty
     try:
-        from backend.rag import _get_client, _get_collection, ingest_docs
-        client = _get_client()
-        collection = _get_collection(client)
+        from backend.rag import _get_collection, ingest_docs
+        collection = _get_collection()
         if collection.count() == 0:
             docs_dir = os.path.join(os.path.dirname(__file__), "..", "docs")
             if os.path.isdir(docs_dir):

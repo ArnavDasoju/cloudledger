@@ -14,17 +14,37 @@ CHROMA_DIR = os.path.join(os.path.dirname(__file__), "chroma_store")
 COLLECTION_NAME = "cloudledger_docs"
 CHUNK_SIZE = 800
 CHUNK_OVERLAP = 100
+MAX_DISTANCE = 1.2  # cosine distance threshold — discard chunks above this
+
+# Module-level singleton so we don't re-create the client on every call
+_client: chromadb.ClientAPI | None = None
+_collection: chromadb.Collection | None = None
 
 
 def _get_client() -> chromadb.ClientAPI:
-    return chromadb.PersistentClient(path=CHROMA_DIR)
+    global _client
+    if _client is None:
+        _client = chromadb.PersistentClient(path=CHROMA_DIR)
+    return _client
 
 
-def _get_collection(client: chromadb.ClientAPI) -> chromadb.Collection:
-    return client.get_or_create_collection(
-        name=COLLECTION_NAME,
-        metadata={"hnsw:space": "cosine"},
-    )
+def _get_collection(client: chromadb.ClientAPI | None = None) -> chromadb.Collection:
+    global _collection
+    if _collection is None:
+        if client is None:
+            client = _get_client()
+        _collection = client.get_or_create_collection(
+            name=COLLECTION_NAME,
+            metadata={"hnsw:space": "cosine"},
+        )
+    return _collection
+
+
+def _reset_singleton():
+    """Reset cached client/collection — used after ingest to pick up new data."""
+    global _client, _collection
+    _client = None
+    _collection = None
 
 
 def _chunk_text(text: str, source: str) -> List[Dict]:
@@ -36,7 +56,6 @@ def _chunk_text(text: str, source: str) -> List[Dict]:
     buffer_len = 0
 
     for line in lines:
-        # Track the nearest markdown header as section context
         stripped = line.strip()
         if stripped.startswith("## ") or stripped.startswith("### "):
             current_section = stripped.lstrip("#").strip()
@@ -76,9 +95,17 @@ def _chunk_text(text: str, source: str) -> List[Dict]:
 def ingest_docs(docs_dir: str) -> Dict:
     """Index all markdown files from docs_dir into the vector store.
 
+    Clears existing data first so deleted docs don't leave stale chunks.
     Returns stats: {files, chunks, skipped}.
     """
     client = _get_client()
+
+    # Drop and recreate collection to clear stale chunks from deleted/renamed docs
+    try:
+        client.delete_collection(COLLECTION_NAME)
+    except Exception:
+        pass
+    _reset_singleton()
     collection = _get_collection(client)
 
     docs_path = Path(docs_dir)
@@ -104,21 +131,20 @@ def ingest_docs(docs_dir: str) -> Dict:
         documents = []
         metadatas = []
 
-        for i, chunk in enumerate(chunks):
-            chunk_id = hashlib.sha256(f"{source_name}:{i}:{chunk['text'][:100]}".encode()).hexdigest()[:16]
+        for chunk in chunks:
+            # Content-only hash so IDs are stable regardless of chunk ordering
+            chunk_id = hashlib.sha256(
+                f"{source_name}:{chunk['section']}:{chunk['text']}".encode()
+            ).hexdigest()[:16]
             ids.append(chunk_id)
             documents.append(chunk["text"])
             metadatas.append({"source": chunk["source"], "section": chunk["section"]})
 
-        # Upsert so re-running is idempotent
         collection.upsert(ids=ids, documents=documents, metadatas=metadatas)
         total_chunks += len(chunks)
         logger.info("Indexed %s: %d chunks", source_name, len(chunks))
 
     return {"files": len(md_files), "chunks": total_chunks, "skipped": skipped}
-
-
-MAX_DISTANCE = 1.2  # cosine distance threshold — discard chunks above this
 
 
 def retrieve(query: str, n_results: int = 5) -> List[Dict]:
@@ -128,8 +154,7 @@ def retrieve(query: str, n_results: int = 5) -> List[Dict]:
     and deduplicates near-identical chunks from overlapping windows.
     Returns list of {text, source, section, distance}.
     """
-    client = _get_client()
-    collection = _get_collection(client)
+    collection = _get_collection()
 
     if collection.count() == 0:
         logger.warning("Vector store is empty — run ingest first")

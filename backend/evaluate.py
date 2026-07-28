@@ -7,6 +7,9 @@ import re
 from typing import Callable, Dict, List
 
 import anthropic
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 

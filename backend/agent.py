@@ -14,6 +14,16 @@ logger = logging.getLogger(__name__)
 
 CLAUDE_MODEL = "claude-sonnet-4-6"
 
+# Module-level singleton — reuse across requests
+_anthropic_client: anthropic.Anthropic | None = None
+
+
+def _get_anthropic() -> anthropic.Anthropic:
+    global _anthropic_client
+    if _anthropic_client is None:
+        _anthropic_client = anthropic.Anthropic()
+    return _anthropic_client
+
 
 def ask(
     question: str,
@@ -94,7 +104,7 @@ Strict formatting rules:
     messages.append({"role": "user", "content": question})
 
     # Step 5: Call Claude
-    client = anthropic.Anthropic()
+    client = _get_anthropic()
     response = client.messages.create(
         model=CLAUDE_MODEL,
         max_tokens=1024,

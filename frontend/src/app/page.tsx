@@ -1789,7 +1789,7 @@ function CloudlyPanel({ open, onClose, screenName, screenData, onCopy }: {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [expandedSources, setExpandedSources] = useState<number | null>(null);
+  const [expandedSources, setExpandedSources] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -1882,47 +1882,53 @@ function CloudlyPanel({ open, onClose, screenName, screenData, onCopy }: {
           )}
           {messages.map((m, i) => (
             <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-              <div className="rounded-xl px-3.5 py-2.5 text-[13px] leading-relaxed max-w-[85%]"
-                style={{
-                  background: m.role === "user" ? C.accent : C.card,
-                  color: m.role === "user" ? "#FFFFFF" : C.text,
-                  border: m.role === "assistant" ? `1px solid ${C.border}` : "none",
-                }}>
-                {m.role === "assistant" ? <CloudlyMarkdown text={m.content} /> : m.content}
-              </div>
-              {/* Citation badges — evidence-chain style */}
-              {m.role === "assistant" && m.sources && m.sources.length > 0 && (
-                <div className="mt-1.5 max-w-[85%]">
-                  <div className="flex flex-wrap gap-1">
-                    {m.sources.map((s, si) => (
-                      <button key={si}
-                        onClick={() => setExpandedSources(expandedSources === i * 100 + si ? null : i * 100 + si)}
-                        className="text-[10px] font-medium px-1.5 py-0.5 rounded cursor-pointer"
-                        style={{
-                          background: expandedSources === i * 100 + si ? "rgba(201,99,58,0.15)" : "rgba(201,99,58,0.08)",
-                          color: C.accent,
-                          border: `1px solid ${expandedSources === i * 100 + si ? "rgba(201,99,58,0.3)" : "transparent"}`,
-                        }}>
-                        [{si + 1}] {s.section || s.source}
-                      </button>
-                    ))}
-                  </div>
-                  {m.sources.map((s, si) => (
-                    expandedSources === i * 100 + si && (
-                      <div key={`exp-${si}`} className="mt-1.5 rounded-lg p-3"
-                        style={{ background: "#FAFAF8", border: `1px solid ${C.border}` }}>
-                        <p className="text-[10px] font-medium mb-0.5" style={{ color: C.muted }}>
-                          Source: {s.source}
-                          {s.section && <span> / {s.section}</span>}
-                        </p>
-                        <p className="text-[11px] leading-relaxed" style={{ color: C.text }}>
-                          {s.snippet}
-                        </p>
-                      </div>
-                    )
-                  ))}
+              <div className="flex flex-col max-w-[85%]">
+                <div className="rounded-xl px-3.5 py-2.5 text-[13px] leading-relaxed"
+                  style={{
+                    background: m.role === "user" ? C.accent : C.card,
+                    color: m.role === "user" ? "#FFFFFF" : C.text,
+                    border: m.role === "assistant" ? `1px solid ${C.border}` : "none",
+                  }}>
+                  {m.role === "assistant" ? <CloudlyMarkdown text={m.content} /> : m.content}
                 </div>
-              )}
+                {/* Citation badges — evidence-chain style */}
+                {m.role === "assistant" && m.sources && m.sources.length > 0 && (
+                  <div className="mt-1.5">
+                    <div className="flex flex-wrap gap-1">
+                      {m.sources.map((s, si) => {
+                        const key = `${i}-${si}`;
+                        return (
+                          <button key={si}
+                            onClick={() => setExpandedSources(expandedSources === key ? null : key)}
+                            className="text-[10px] font-medium px-1.5 py-0.5 rounded cursor-pointer"
+                            style={{
+                              background: expandedSources === key ? "rgba(201,99,58,0.15)" : "rgba(201,99,58,0.08)",
+                              color: C.accent,
+                              border: `1px solid ${expandedSources === key ? "rgba(201,99,58,0.3)" : "transparent"}`,
+                            }}>
+                            [{si + 1}] {s.section || s.source}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {m.sources.map((s, si) => {
+                      const key = `${i}-${si}`;
+                      return expandedSources === key ? (
+                        <div key={`exp-${si}`} className="mt-1.5 rounded-lg p-3"
+                          style={{ background: "#FAFAF8", border: `1px solid ${C.border}` }}>
+                          <p className="text-[10px] font-medium mb-0.5" style={{ color: C.muted }}>
+                            Source: {s.source}
+                            {s.section && <span> / {s.section}</span>}
+                          </p>
+                          <p className="text-[11px] leading-relaxed" style={{ color: C.text }}>
+                            {s.snippet}
+                          </p>
+                        </div>
+                      ) : null;
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
           ))}
           {loading && (
