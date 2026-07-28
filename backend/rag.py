@@ -1,0 +1,153 @@
+"""RAG retrieval layer — indexes markdown docs into ChromaDB and retrieves relevant chunks."""
+
+import os
+import hashlib
+import logging
+from pathlib import Path
+from typing import List, Dict
+
+import chromadb
+
+logger = logging.getLogger(__name__)
+
+CHROMA_DIR = os.path.join(os.path.dirname(__file__), "chroma_store")
+COLLECTION_NAME = "cloudledger_docs"
+CHUNK_SIZE = 800
+CHUNK_OVERLAP = 100
+
+
+def _get_client() -> chromadb.ClientAPI:
+    return chromadb.PersistentClient(path=CHROMA_DIR)
+
+
+def _get_collection(client: chromadb.ClientAPI) -> chromadb.Collection:
+    return client.get_or_create_collection(
+        name=COLLECTION_NAME,
+        metadata={"hnsw:space": "cosine"},
+    )
+
+
+def _chunk_text(text: str, source: str) -> List[Dict]:
+    """Split text into overlapping chunks, preserving section headers as context."""
+    lines = text.split("\n")
+    chunks = []
+    current_section = ""
+    buffer = []
+    buffer_len = 0
+
+    for line in lines:
+        # Track the nearest markdown header as section context
+        stripped = line.strip()
+        if stripped.startswith("## ") or stripped.startswith("### "):
+            current_section = stripped.lstrip("#").strip()
+
+        line_len = len(line)
+        if buffer_len + line_len > CHUNK_SIZE and buffer:
+            chunk_text = "\n".join(buffer)
+            chunks.append({
+                "text": chunk_text,
+                "source": source,
+                "section": current_section,
+            })
+            # Keep overlap: take lines from the end of the buffer
+            overlap_lines = []
+            overlap_len = 0
+            for prev_line in reversed(buffer):
+                if overlap_len + len(prev_line) > CHUNK_OVERLAP:
+                    break
+                overlap_lines.insert(0, prev_line)
+                overlap_len += len(prev_line)
+            buffer = overlap_lines
+            buffer_len = overlap_len
+
+        buffer.append(line)
+        buffer_len += line_len
+
+    if buffer:
+        chunks.append({
+            "text": "\n".join(buffer),
+            "source": source,
+            "section": current_section,
+        })
+
+    return chunks
+
+
+def ingest_docs(docs_dir: str) -> Dict:
+    """Index all markdown files from docs_dir into the vector store.
+
+    Returns stats: {files, chunks, skipped}.
+    """
+    client = _get_client()
+    collection = _get_collection(client)
+
+    docs_path = Path(docs_dir)
+    md_files = sorted(docs_path.glob("**/*.md"))
+
+    if not md_files:
+        logger.warning("No markdown files found in %s", docs_dir)
+        return {"files": 0, "chunks": 0, "skipped": 0}
+
+    total_chunks = 0
+    skipped = 0
+
+    for md_file in md_files:
+        text = md_file.read_text(encoding="utf-8")
+        if not text.strip():
+            skipped += 1
+            continue
+
+        source_name = str(md_file.relative_to(docs_path))
+        chunks = _chunk_text(text, source_name)
+
+        ids = []
+        documents = []
+        metadatas = []
+
+        for i, chunk in enumerate(chunks):
+            chunk_id = hashlib.sha256(f"{source_name}:{i}:{chunk['text'][:100]}".encode()).hexdigest()[:16]
+            ids.append(chunk_id)
+            documents.append(chunk["text"])
+            metadatas.append({"source": chunk["source"], "section": chunk["section"]})
+
+        # Upsert so re-running is idempotent
+        collection.upsert(ids=ids, documents=documents, metadatas=metadatas)
+        total_chunks += len(chunks)
+        logger.info("Indexed %s: %d chunks", source_name, len(chunks))
+
+    return {"files": len(md_files), "chunks": total_chunks, "skipped": skipped}
+
+
+def retrieve(query: str, n_results: int = 5) -> List[Dict]:
+    """Retrieve the most relevant chunks for a query.
+
+    Returns list of {text, source, section, distance}.
+    """
+    client = _get_client()
+    collection = _get_collection(client)
+
+    if collection.count() == 0:
+        logger.warning("Vector store is empty — run ingest first")
+        return []
+
+    results = collection.query(query_texts=[query], n_results=n_results)
+
+    sources = []
+    for i in range(len(results["ids"][0])):
+        sources.append({
+            "text": results["documents"][0][i],
+            "source": results["metadatas"][0][i]["source"],
+            "section": results["metadatas"][0][i]["section"],
+            "distance": results["distances"][0][i] if results.get("distances") else None,
+        })
+
+    return sources
+
+
+if __name__ == "__main__":
+    import sys
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+
+    docs_dir = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(__file__), "..", "docs")
+    stats = ingest_docs(docs_dir)
+    print(f"Ingested {stats['files']} files, {stats['chunks']} chunks, {stats['skipped']} skipped")

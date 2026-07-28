@@ -1,0 +1,34 @@
+[
+  {
+    "question": "What is day normalization and why does CloudLedger use it?",
+    "expected_answer": "Day normalization adjusts the prior month's cost by the ratio of current_month_days / prior_month_days before comparing. This eliminates false positives from months with different lengths (e.g. February 28 vs March 31). A resource costing $100/day would show a $300 raw increase from Feb to Mar, but after normalization the delta is $0."
+  },
+  {
+    "question": "What does the reason code orphan_unknown mean?",
+    "expected_answer": "orphan_unknown means the resource is not in any IaC state file and has no team tags. CloudLedger cannot determine who created it or why. It gets a confidence score of 0.50, the lowest classification. These resources are typically the highest priority for investigation."
+  },
+  {
+    "question": "How does CloudLedger decide between steady_state and usage_growth?",
+    "expected_answer": "Both apply to IaC-managed resources with no change events. The engine uses the day-normalized percentage change: if the absolute normalized delta is 5% or less, it is steady_state. If it exceeds 5%, it is usage_growth. The normalization removes month-length noise before applying this threshold."
+  },
+  {
+    "question": "What is a confidence score and how is it calculated?",
+    "expected_answer": "A confidence score between 0 and 1 indicates classification reliability. IaC-managed resources get 0.95, edge cases get 0.90, non_terraform_iac gets 0.85, orphan_sdk_created gets 0.70, legacy_untracked gets 0.60, orphan_unknown gets 0.50. Attribution coverage is the percentage of rows with confidence >= 0.70."
+  },
+  {
+    "question": "What charge types trigger the savings_plan_allocation reason code?",
+    "expected_answer": "The charge types SavingsPlanCoveredUsage, SavingsPlanNegation, SavingsPlanRecurringFee, and SavingsPlanUpfrontFee all trigger savings_plan_allocation. These resources are marked as excluded edge cases with confidence 0.90."
+  },
+  {
+    "question": "What is the difference between orphan_sdk_created and orphan_unknown?",
+    "expected_answer": "Both are resources not in any IaC state. orphan_sdk_created has team tags, suggesting it was created manually by someone on a known team (confidence 0.70). orphan_unknown has no team tags and no IaC — its origin is unknown (confidence 0.50)."
+  },
+  {
+    "question": "How does the classification decision tree work?",
+    "expected_answer": "The engine evaluates each resource through a fixed priority chain: 1) edge case detection from charge types, 2) new_resource if not in prior period, 3) removed_resource if not in current period, 4) planned if IaC-managed with change event, 5) drift sub-types if not in IaC, 6) usage_growth if normalized delta > 5%, 7) steady_state if <= 5%, 8) price_change as fallback."
+  },
+  {
+    "question": "What is an evidence chain?",
+    "expected_answer": "An evidence chain is a structured JSON object attached to each variance row for audit. It records the classification inputs (costs, delta, IaC status, charge types) and an ordered list of classification_steps. Each step has a step name, result, and detail. Edge cases have one step, new/removed resources have one step, and all others have up to three steps: iac_lookup, change_event_match, and classification."
+  }
+]

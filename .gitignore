@@ -47,5 +47,9 @@ node_modules/
 # Uploads
 data/uploads/
 
+# RAG vector store
+chroma_store/
+backend/chroma_store/
+
 # npm
 npm-debug.log*
