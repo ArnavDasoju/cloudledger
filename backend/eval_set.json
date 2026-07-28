@@ -30,5 +30,33 @@
   {
     "question": "What is an evidence chain?",
     "expected_answer": "An evidence chain is a structured JSON object attached to each variance row for audit. It records the classification inputs (costs, delta, IaC status, charge types) and an ordered list of classification_steps. Each step has a step name, result, and detail. Edge cases have one step, new/removed resources have one step, and all others have up to three steps: iac_lookup, change_event_match, and classification."
+  },
+  {
+    "question": "How do I connect my Azure account to CloudLedger?",
+    "expected_answer": "On the Upload screen, click the Azure tab. Enter your Subscription ID, Tenant ID, Client ID, and Client Secret. The App Registration needs the Cost Management Reader role on the subscription. CloudLedger uses OAuth2 client_credentials flow to get a token and queries the Azure Cost Management API."
+  },
+  {
+    "question": "What does the Close Packet screen show?",
+    "expected_answer": "The Close Packet screen is a CFO-ready summary with executive KPIs (prior cost, current cost, net variance, total variance), variance by reason code with top contributing resources, action items for drift resources, and export buttons for PDF close packet and GL journal entry CSV."
+  },
+  {
+    "question": "What IaC tools does CloudLedger support?",
+    "expected_answer": "CloudLedger supports Terraform (.tfstate files), ARM Templates (Azure), CloudFormation (AWS), and Pulumi. Each resource is tagged with its IaC source for audit. The frontend upload supports Terraform; the other tools are available through the normalize_resources API."
+  },
+  {
+    "question": "What is the MCP server and how do I use it?",
+    "expected_answer": "CloudLedger includes an MCP server with 6 tools: get_billing_overview, get_variance_by_resource, get_root_cause_summary, get_iac_coverage, get_available_periods, and get_anomalies. Add it to your MCP client config pointing to the cloudledger.mcp_server module."
+  },
+  {
+    "question": "How many months of billing data do I need?",
+    "expected_answer": "You need at least 2 billing periods. The variance engine compares the current month against the prior month. With more than 2 months, CloudLedger runs variance for every consecutive pair and enables the Trends screen. You can select 2-12 months when connecting to AWS or Azure."
+  },
+  {
+    "question": "What are the 7 database tables in CloudLedger?",
+    "expected_answer": "The tables are: raw_billing_lines (bronze, raw CSV data), invoices (silver, aggregated totals), resources (silver, per-resource per-period), change_events (infrastructure changes), variance_report (gold, variance with reason codes), allocations (cost attribution), and logical_resources (grouped related resources like EKS clusters)."
+  },
+  {
+    "question": "What does the GL export contain?",
+    "expected_answer": "The GL export is a CSV with columns Date, Account (derived from service name as 6XXX00), Description (resource name and reason code), Debit (cost increases), Credit (cost decreases), Reason, and Service. One row per variance entry, formatted for import into accounting systems like QuickBooks or NetSuite."
   }
 ]

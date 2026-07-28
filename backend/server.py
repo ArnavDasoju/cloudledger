@@ -37,8 +37,20 @@ MAX_UPLOAD_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Create database tables on startup."""
+    """Create database tables and ensure RAG index on startup."""
     create_all_tables()
+    # Auto-ingest docs if the vector store is empty
+    try:
+        from backend.rag import _get_client, _get_collection, ingest_docs
+        client = _get_client()
+        collection = _get_collection(client)
+        if collection.count() == 0:
+            docs_dir = os.path.join(os.path.dirname(__file__), "..", "docs")
+            if os.path.isdir(docs_dir):
+                stats = ingest_docs(docs_dir)
+                logger.info("Auto-ingested RAG docs: %s", stats)
+    except Exception as e:
+        logger.warning("RAG auto-ingest skipped: %s", e)
     yield
 
 

@@ -27,7 +27,11 @@ def ask(
     Returns {answer: str, sources: [{source, section, snippet}]}.
     """
     # Step 1: Retrieve relevant documentation chunks
-    retrieved = retrieve(question, n_results=n_results)
+    try:
+        retrieved = retrieve(question, n_results=n_results)
+    except Exception as e:
+        logger.warning("RAG retrieval failed, answering without knowledge base: %s", e)
+        retrieved = []
 
     # Step 2: Build context from retrieved chunks
     context_parts = []

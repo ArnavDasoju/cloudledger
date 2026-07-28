@@ -118,9 +118,14 @@ def ingest_docs(docs_dir: str) -> Dict:
     return {"files": len(md_files), "chunks": total_chunks, "skipped": skipped}
 
 
+MAX_DISTANCE = 1.2  # cosine distance threshold — discard chunks above this
+
+
 def retrieve(query: str, n_results: int = 5) -> List[Dict]:
     """Retrieve the most relevant chunks for a query.
 
+    Applies a distance threshold to filter out low-relevance results,
+    and deduplicates near-identical chunks from overlapping windows.
     Returns list of {text, source, section, distance}.
     """
     client = _get_client()
@@ -130,18 +135,39 @@ def retrieve(query: str, n_results: int = 5) -> List[Dict]:
         logger.warning("Vector store is empty — run ingest first")
         return []
 
-    results = collection.query(query_texts=[query], n_results=n_results)
+    # Fetch extra candidates so we still have enough after filtering
+    results = collection.query(query_texts=[query], n_results=n_results + 3)
 
-    sources = []
+    raw = []
     for i in range(len(results["ids"][0])):
-        sources.append({
+        dist = results["distances"][0][i] if results.get("distances") else 0
+        if dist > MAX_DISTANCE:
+            continue
+        raw.append({
             "text": results["documents"][0][i],
             "source": results["metadatas"][0][i]["source"],
             "section": results["metadatas"][0][i]["section"],
-            "distance": results["distances"][0][i] if results.get("distances") else None,
+            "distance": dist,
         })
 
-    return sources
+    # Deduplicate overlapping chunks: if two chunks share >50% of their text, keep the closer one
+    deduped = []
+    for chunk in raw:
+        is_dup = False
+        chunk_words = set(chunk["text"].split())
+        for existing in deduped:
+            existing_words = set(existing["text"].split())
+            overlap = len(chunk_words & existing_words)
+            smaller = min(len(chunk_words), len(existing_words))
+            if smaller > 0 and overlap / smaller > 0.5:
+                is_dup = True
+                break
+        if not is_dup:
+            deduped.append(chunk)
+        if len(deduped) >= n_results:
+            break
+
+    return deduped
 
 
 if __name__ == "__main__":
