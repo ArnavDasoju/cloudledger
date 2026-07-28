@@ -1779,13 +1779,17 @@ function CloudlyMarkdown({ text }: { text: string }) {
   return <div className="space-y-1">{elements}</div>;
 }
 
+type ChatSource = { source: string; section: string; snippet: string };
+type ChatMessage = { role: "user" | "assistant"; content: string; sources?: ChatSource[] };
+
 function CloudlyPanel({ open, onClose, screenName, screenData, onCopy }: {
   open: boolean; onClose: () => void; screenName: string; screenData: unknown; onCopy?: (msg: string) => void;
 }) {
-  const [messages, setMessages] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [expandedSources, setExpandedSources] = useState<number | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -1802,12 +1806,12 @@ function CloudlyPanel({ open, onClose, screenName, screenData, onCopy }: {
     if (!msg || loading) return;
     setInput("");
     setError(null);
-    const updated = [...messages, { role: "user" as const, content: msg }];
+    const updated: ChatMessage[] = [...messages, { role: "user", content: msg }];
     setMessages(updated);
     setLoading(true);
     try {
-      const { reply } = await api.sendChat(msg, screenName, screenData, messages);
-      setMessages([...updated, { role: "assistant", content: reply }]);
+      const { reply, sources } = await api.sendChat(msg, screenName, screenData, messages);
+      setMessages([...updated, { role: "assistant", content: reply, sources: sources || [] }]);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to get response");
     } finally {
@@ -1886,6 +1890,39 @@ function CloudlyPanel({ open, onClose, screenName, screenData, onCopy }: {
                 }}>
                 {m.role === "assistant" ? <CloudlyMarkdown text={m.content} /> : m.content}
               </div>
+              {/* Citation badges — evidence-chain style */}
+              {m.role === "assistant" && m.sources && m.sources.length > 0 && (
+                <div className="mt-1.5 max-w-[85%]">
+                  <div className="flex flex-wrap gap-1">
+                    {m.sources.map((s, si) => (
+                      <button key={si}
+                        onClick={() => setExpandedSources(expandedSources === i * 100 + si ? null : i * 100 + si)}
+                        className="text-[10px] font-medium px-1.5 py-0.5 rounded cursor-pointer"
+                        style={{
+                          background: expandedSources === i * 100 + si ? "rgba(201,99,58,0.15)" : "rgba(201,99,58,0.08)",
+                          color: C.accent,
+                          border: `1px solid ${expandedSources === i * 100 + si ? "rgba(201,99,58,0.3)" : "transparent"}`,
+                        }}>
+                        [{si + 1}] {s.section || s.source}
+                      </button>
+                    ))}
+                  </div>
+                  {m.sources.map((s, si) => (
+                    expandedSources === i * 100 + si && (
+                      <div key={`exp-${si}`} className="mt-1.5 rounded-lg p-3"
+                        style={{ background: "#FAFAF8", border: `1px solid ${C.border}` }}>
+                        <p className="text-[10px] font-medium mb-0.5" style={{ color: C.muted }}>
+                          Source: {s.source}
+                          {s.section && <span> / {s.section}</span>}
+                        </p>
+                        <p className="text-[11px] leading-relaxed" style={{ color: C.text }}>
+                          {s.snippet}
+                        </p>
+                      </div>
+                    )
+                  ))}
+                </div>
+              )}
             </div>
           ))}
           {loading && (

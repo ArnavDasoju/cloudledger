@@ -151,6 +151,9 @@ export const api = {
       const text = await res.text();
       throw new Error(text || `Chat failed: ${res.status}`);
     }
-    return res.json() as Promise<{ reply: string }>;
+    return res.json() as Promise<{
+      reply: string;
+      sources?: { source: string; section: string; snippet: string }[];
+    }>;
   },
 };
