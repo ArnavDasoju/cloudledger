@@ -132,8 +132,10 @@ def login(req: LoginRequest):
         user = session.query(User).filter(User.email == req.email.lower().strip()).first()
         if not user or not verify_password(req.password, user.password_hash):
             raise HTTPException(401, "Invalid email or password.")
-        token = create_token(user.id, user.email)
-    return {"token": token, "email": user.email, "name": user.name or ""}
+        # Capture values inside session before it closes
+        uid, email, name = user.id, user.email, user.name or ""
+        token = create_token(uid, email)
+    return {"token": token, "email": email, "name": name}
 
 @app.get("/api/auth/me")
 def auth_me(request: Request):
@@ -142,7 +144,8 @@ def auth_me(request: Request):
         user = session.query(User).filter(User.id == user_id).first()
         if not user:
             raise HTTPException(401, "User not found")
-    return {"user_id": user.id, "email": user.email, "name": user.name or ""}
+        uid, email, name = user.id, user.email, user.name or ""
+    return {"user_id": uid, "email": email, "name": name}
 
 
 # ── Helper: get user_id from request (returns None for unauthenticated) ──────
