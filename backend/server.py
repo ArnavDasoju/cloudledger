@@ -207,6 +207,10 @@ async def upload_csv(request: Request, files: list[UploadFile] = File(...)):
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
 
+    # Stamp all newly inserted rows with this user's ID
+    with get_db() as session:
+        session.query(RawBillingLine).filter(RawBillingLine.user_id == None).update({"user_id": uid})  # noqa: E711
+
     return {"rows_inserted": total_inserted, "rows_skipped": total_skipped, "files_count": len(files)}
 
 
@@ -245,7 +249,7 @@ async def upload_terraform(request: Request, files: list[UploadFile] = File(...)
 
 @app.post("/api/pipeline/run")
 def run_pipeline(request: Request, prior_period: str, current_period: str):
-    _uid(request)
+    uid = _uid(request)
     _parse_period(prior_period)
     _parse_period(current_period)
 
@@ -257,6 +261,11 @@ def run_pipeline(request: Request, prior_period: str, current_period: str):
     normalize_invoices()
     normalize_resources(terraform_state_paths=tf_paths if tf_paths else None)
     result = compute_variance(prior_period, current_period)
+
+    # Stamp user_id on all pipeline-generated rows
+    with get_db() as session:
+        for Model in [Invoice, Resource, VarianceReport]:
+            session.query(Model).filter(Model.user_id == None).update({"user_id": uid})  # noqa: E711
 
     def _sanitize(obj):
         if isinstance(obj, dict):
@@ -274,18 +283,18 @@ def run_pipeline(request: Request, prior_period: str, current_period: str):
 
 @app.get("/api/bill-overview")
 def bill_overview(request: Request, prior_period: str, current_period: str):
-    _uid(request)
+    uid = _uid(request)
     prior_date = _parse_period(prior_period)
     current_date = _parse_period(current_period)
 
     with get_db() as session:
         prior_total = _f(
             session.query(func.sum(Invoice.total_billed_cost))
-            .filter(Invoice.billing_period_start == prior_date).scalar()
+            .filter(Invoice.billing_period_start == prior_date, Invoice.user_id == uid).scalar()
         )
         current_total = _f(
             session.query(func.sum(Invoice.total_billed_cost))
-            .filter(Invoice.billing_period_start == current_date).scalar()
+            .filter(Invoice.billing_period_start == current_date, Invoice.user_id == uid).scalar()
         )
 
     return {
@@ -1062,7 +1071,7 @@ def get_trends(request: Request):
 
 @app.post("/api/pipeline/run-all")
 def run_pipeline_all(request: Request):
-    _uid(request)
+    uid = _uid(request)
     """Run variance for all consecutive period pairs."""
     tf_dir = os.path.join(UPLOAD_DIR, "terraform")
     tf_paths = []
@@ -1089,6 +1098,11 @@ def run_pipeline_all(request: Request):
         current = period_list[i + 1].strftime("%Y-%m")
         result = compute_variance(prior, current)
         results.append({"prior": prior, "current": current, **result})
+
+    # Stamp user_id on pipeline-generated rows
+    with get_db() as session:
+        for Model in [Invoice, Resource, VarianceReport]:
+            session.query(Model).filter(Model.user_id == None).update({"user_id": uid})  # noqa: E711
 
     return {
         "periods": [p.strftime("%Y-%m") for p in period_list],

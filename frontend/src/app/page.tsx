@@ -68,8 +68,8 @@ function TopNav({ screen, onNav, pipelineDone, onCloudly }: { screen: number; on
         );
       })}
 
-      {/* Ask Cloudly button */}
-      <div className="ml-auto">
+      {/* Ask Cloudly + Sign Out */}
+      <div className="ml-auto flex items-center gap-2">
         {pipelineDone && onCloudly && (
           <button onClick={onCloudly}
             className="cl-btn flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-[12px] font-medium cursor-pointer"
@@ -81,6 +81,11 @@ function TopNav({ screen, onNav, pipelineDone, onCloudly }: { screen: number; on
             Ask Cloudly
           </button>
         )}
+        <button onClick={() => { localStorage.removeItem("cl_token"); window.location.reload(); }}
+          className="px-3 py-1.5 rounded-full text-[11px] font-medium cursor-pointer"
+          style={{ background: "transparent", color: C.muted, border: `1px solid ${C.border}` }}>
+          Sign Out
+        </button>
       </div>
     </div>
   );
@@ -658,12 +663,14 @@ function UploadScreen({ files, setFiles, onDone }: {
 function OverviewScreen({ prior, current, onData }: { prior: string; current: string; onData?: (d: unknown) => void }) {
   const [data, setData] = useState<{ prior_total: number; current_total: number; delta: number } | null>(null);
   const [variance, setVariance] = useState<{ services: { service: string; abs_delta: number }[]; total_variance: number } | null>(null);
+  const [forecast, setForecast] = useState<{ total: { forecast: number | null; confidence: string; trend_pct: number } } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(() => {
     setError(null);
     api.getBillOverview(prior, current).then(d => { setData(d); onData?.(d); }).catch(e => setError(e.message));
     api.getVarianceByService(current).then(setVariance).catch(() => {});
+    api.getForecast().then(setForecast).catch(() => {});
   }, [prior, current]);
   useEffect(load, [load]);
 
@@ -678,7 +685,7 @@ function OverviewScreen({ prior, current, onData }: { prior: string; current: st
   return (
     <Stagger screenKey={1}>
       {/* KPI row */}
-      <div className="grid grid-cols-4 gap-4 mb-4">
+      <div className="grid grid-cols-5 gap-4 mb-4">
         <Card>
           <CardLabel>{shortMonth(prior)} Spend</CardLabel>
           <BigNum sub="Prior month">{fmt(data.prior_total)}</BigNum>
@@ -695,6 +702,20 @@ function OverviewScreen({ prior, current, onData }: { prior: string; current: st
         <Card>
           <CardLabel>Change</CardLabel>
           <BigNum sub={`vs ${shortMonth(prior)}`}>{pctChange >= 0 ? "+" : ""}{pctChange.toFixed(1)}%</BigNum>
+        </Card>
+        <Card>
+          <CardLabel>Next Month (est.)</CardLabel>
+          {forecast?.total?.forecast != null ? (
+            <>
+              <BigNum>{fmt(forecast.total.forecast)}</BigNum>
+              <p className="text-[10px] mt-0.5" style={{ color: forecast.total.confidence === "high" ? C.green : forecast.total.confidence === "medium" ? C.accent : C.muted }}>
+                {forecast.total.confidence} confidence
+                {forecast.total.trend_pct !== 0 && <> &middot; {forecast.total.trend_pct > 0 ? "+" : ""}{forecast.total.trend_pct}%/mo</>}
+              </p>
+            </>
+          ) : (
+            <p className="text-xs mt-2" style={{ color: C.muted }}>Need 2+ periods</p>
+          )}
         </Card>
       </div>
 
@@ -1372,6 +1393,8 @@ function ClosePacketScreen({ current, prior, onData }: { current: string; prior:
     resource_count: number; managed_count: number; managed_cost: number;
     action_items: { resource_name: string; service: string; delta: number; reason: string; action: string }[];
   } | null>(null);
+  const [narrative, setNarrative] = useState<string | null>(null);
+  const [narrativeLoading, setNarrativeLoading] = useState(false);
 
   const [expandedReason, setExpandedReason] = useState<string | null>(null);
 
@@ -1384,17 +1407,46 @@ function ClosePacketScreen({ current, prior, onData }: { current: string; prior:
   const pctChange = data.prior_cost > 0 ? ((data.net_variance / data.prior_cost) * 100) : 0;
   const managedPct = data.resource_count > 0 ? ((data.managed_count / data.resource_count) * 100) : 0;
 
+  function generateNarrative() {
+    setNarrativeLoading(true);
+    api.getNarrative(current, prior)
+      .then(d => setNarrative(d.narrative))
+      .catch(() => setNarrative("Failed to generate narrative."))
+      .finally(() => setNarrativeLoading(false));
+  }
+
   return (
     <Stagger screenKey={5}>
-      {/* Summary narrative */}
+      {/* AI-generated executive narrative */}
       <Card className="mb-4">
-        <CardLabel>Month-End Summary — {monthLabel(current)}</CardLabel>
-        <p className="text-sm mt-2 leading-relaxed" style={{ color: C.text }}>
-          Cloud spend {data.net_variance >= 0 ? "increased" : "decreased"} by <strong>{data.net_variance >= 0 ? "+" : ""}{fmt(data.net_variance)}</strong> ({pctChange >= 0 ? "+" : ""}{pctChange.toFixed(1)}%) from {fmt(data.prior_cost)} to {fmt(data.total_cost)}.
-          {" "}{data.resource_count} resources were analyzed across {data.reasons.length} reason categories.
-          {data.managed_count > 0 && <> {managedPct.toFixed(0)}% of resources ({data.managed_count} of {data.resource_count}) are managed by Terraform.</>}
-          {data.action_items.length > 0 && <> {data.action_items.length} drift items require follow-up.</>}
-        </p>
+        <div className="flex items-center justify-between mb-2">
+          <CardLabel>Executive Summary — {monthLabel(current)}</CardLabel>
+          {!narrative && !narrativeLoading && (
+            <button onClick={generateNarrative}
+              className="text-[11px] font-medium px-3 py-1 rounded-full cursor-pointer"
+              style={{ background: "rgba(201,99,58,0.1)", color: C.accent, border: `1px solid rgba(201,99,58,0.2)` }}>
+              Generate with AI
+            </button>
+          )}
+        </div>
+        {narrativeLoading ? (
+          <div className="py-4">
+            <Skeleton className="h-4 w-full mb-2" />
+            <Skeleton className="h-4 w-3/4 mb-2" />
+            <Skeleton className="h-4 w-5/6" />
+          </div>
+        ) : narrative ? (
+          <div className="text-sm leading-relaxed" style={{ color: C.text }}>
+            <CloudlyMarkdown text={narrative} />
+          </div>
+        ) : (
+          <p className="text-sm mt-1 leading-relaxed" style={{ color: C.text }}>
+            Cloud spend {data.net_variance >= 0 ? "increased" : "decreased"} by <strong>{data.net_variance >= 0 ? "+" : ""}{fmt(data.net_variance)}</strong> ({pctChange >= 0 ? "+" : ""}{pctChange.toFixed(1)}%) from {fmt(data.prior_cost)} to {fmt(data.total_cost)}.
+            {" "}{data.resource_count} resources were analyzed across {data.reasons.length} reason categories.
+            {data.managed_count > 0 && <> {managedPct.toFixed(0)}% of resources ({data.managed_count} of {data.resource_count}) are managed by Terraform.</>}
+            {data.action_items.length > 0 && <> {data.action_items.length} drift items require follow-up.</>}
+          </p>
+        )}
       </Card>
 
       {/* KPI row */}
@@ -1780,7 +1832,7 @@ function CloudlyMarkdown({ text }: { text: string }) {
 }
 
 type ChatSource = { source: string; section: string; snippet: string };
-type ChatMessage = { role: "user" | "assistant"; content: string; sources?: ChatSource[] };
+type ChatMessage = { role: "user" | "assistant"; content: string; sources?: ChatSource[]; tools_used?: string[] };
 
 function CloudlyPanel({ open, onClose, screenName, screenData, onCopy }: {
   open: boolean; onClose: () => void; screenName: string; screenData: unknown; onCopy?: (msg: string) => void;
@@ -1810,8 +1862,8 @@ function CloudlyPanel({ open, onClose, screenName, screenData, onCopy }: {
     setMessages(updated);
     setLoading(true);
     try {
-      const { reply, sources } = await api.sendChat(msg, screenName, screenData, messages);
-      setMessages([...updated, { role: "assistant", content: reply, sources: sources || [] }]);
+      const { reply, sources, tools_used } = await api.sendChat(msg, screenName, screenData, messages);
+      setMessages([...updated, { role: "assistant", content: reply, sources: sources || [], tools_used: tools_used || [] }]);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to get response");
     } finally {
@@ -1891,6 +1943,17 @@ function CloudlyPanel({ open, onClose, screenName, screenData, onCopy }: {
                   }}>
                   {m.role === "assistant" ? <CloudlyMarkdown text={m.content} /> : m.content}
                 </div>
+                {/* Tool-use indicator */}
+                {m.role === "assistant" && m.tools_used && m.tools_used.length > 0 && (
+                  <div className="mt-1 flex items-center gap-1">
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={C.green} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="20 6 9 17 4 12"/>
+                    </svg>
+                    <span className="text-[10px]" style={{ color: C.green }}>
+                      Queried database ({m.tools_used.length} {m.tools_used.length === 1 ? "tool" : "tools"})
+                    </span>
+                  </div>
+                )}
                 {/* Citation badges — evidence-chain style */}
                 {m.role === "assistant" && m.sources && m.sources.length > 0 && (
                   <div className="mt-1.5">

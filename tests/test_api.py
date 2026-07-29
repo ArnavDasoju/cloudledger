@@ -60,6 +60,7 @@ def _seed_full_pipeline(db_session):
             (date(2025, 2, 1), "INV-FEB", Decimal("5800.00")),
         ]:
             session.add(Invoice(
+                user_id=1,
                 invoice_id=invoice_id,
                 billing_period_start=period_start,
                 billing_period_end=date(period_start.year, period_start.month, 28),
