@@ -155,6 +155,11 @@ def _uid(request: Request) -> int:
     return get_current_user_id(request)
 
 
+def _uq(session, model, uid: int):
+    """Return a user-scoped query: session.query(model).filter(model.user_id == uid)."""
+    return session.query(model).filter(model.user_id == uid)
+
+
 # ── Periods ──────────────────────────────────────────────────────────────────
 
 @app.get("/api/periods")
@@ -221,12 +226,12 @@ async def upload_csv(request: Request, files: list[UploadFile] = File(...)):
 
 @app.post("/api/upload/terraform")
 async def upload_terraform(request: Request, files: list[UploadFile] = File(...)):
-    _uid(request)  # validate auth
+    uid = _uid(request)
     if len(files) > 20:
         raise HTTPException(400, "Maximum 20 files allowed")
 
     total_resources = 0
-    tf_dir = os.path.join(UPLOAD_DIR, "terraform")
+    tf_dir = os.path.join(UPLOAD_DIR, "terraform", str(uid))
     os.makedirs(tf_dir, exist_ok=True)
 
     for i, file in enumerate(files):
@@ -256,7 +261,7 @@ def run_pipeline(request: Request, prior_period: str, current_period: str):
     _parse_period(prior_period)
     _parse_period(current_period)
 
-    tf_dir = os.path.join(UPLOAD_DIR, "terraform")
+    tf_dir = os.path.join(UPLOAD_DIR, "terraform", str(uid))
     tf_paths = []
     if os.path.isdir(tf_dir):
         tf_paths = [os.path.join(tf_dir, f) for f in os.listdir(tf_dir) if f.endswith(".tfstate")]
@@ -313,7 +318,7 @@ def bill_overview(request: Request, prior_period: str, current_period: str):
 
 @app.get("/api/ingestion-stats")
 def ingestion_stats(request: Request, current_period: str):
-    _uid(request)
+    uid = _uid(request)
     current_date = _parse_period(current_period)
 
     with get_db() as session:
@@ -325,6 +330,7 @@ def ingestion_stats(request: Request, current_period: str):
                 func.sum(RawBillingLine.billed_cost),
                 func.count(distinct(RawBillingLine.resource_id)),
             )
+            .filter(RawBillingLine.user_id == uid)
             .group_by(RawBillingLine.billing_period_start)
             .order_by(RawBillingLine.billing_period_start)
             .all()
@@ -343,7 +349,7 @@ def ingestion_stats(request: Request, current_period: str):
         # --- Resource & terraform matching ---
         resources_current = (
             session.query(Resource)
-            .filter(Resource.billing_period_start == current_date)
+            .filter(Resource.billing_period_start == current_date, Resource.user_id == uid)
             .all()
         )
         resource_count = len(resources_current)
@@ -356,27 +362,27 @@ def ingestion_stats(request: Request, current_period: str):
 
         # --- Data quality checks ---
         missing_resource_id = session.query(func.count(RawBillingLine.id)).filter(
-            RawBillingLine.billing_period_start == current_date,
+            RawBillingLine.billing_period_start == current_date, RawBillingLine.user_id == uid,
             (RawBillingLine.resource_id == None) | (RawBillingLine.resource_id == ""),  # noqa: E711
         ).scalar() or 0
 
         missing_service = session.query(func.count(RawBillingLine.id)).filter(
-            RawBillingLine.billing_period_start == current_date,
+            RawBillingLine.billing_period_start == current_date, RawBillingLine.user_id == uid,
             (RawBillingLine.service_name == None) | (RawBillingLine.service_name == ""),  # noqa: E711
         ).scalar() or 0
 
         zero_cost_lines = session.query(func.count(RawBillingLine.id)).filter(
-            RawBillingLine.billing_period_start == current_date,
+            RawBillingLine.billing_period_start == current_date, RawBillingLine.user_id == uid,
             (RawBillingLine.billed_cost == 0) | (RawBillingLine.billed_cost == None),  # noqa: E711
         ).scalar() or 0
 
         negative_cost_lines = session.query(func.count(RawBillingLine.id)).filter(
-            RawBillingLine.billing_period_start == current_date,
+            RawBillingLine.billing_period_start == current_date, RawBillingLine.user_id == uid,
             RawBillingLine.billed_cost < 0,
         ).scalar() or 0
 
         current_period_rows = session.query(func.count(RawBillingLine.id)).filter(
-            RawBillingLine.billing_period_start == current_date,
+            RawBillingLine.billing_period_start == current_date, RawBillingLine.user_id == uid,
         ).scalar() or 0
 
         # --- Tag coverage ---
@@ -426,7 +432,7 @@ def ingestion_stats(request: Request, current_period: str):
         } for r in unmatched_resources]
 
         # --- Invoice totals ---
-        inv = session.query(Invoice).filter(Invoice.billing_period_start == current_date).first()
+        inv = session.query(Invoice).filter(Invoice.billing_period_start == current_date, Invoice.user_id == uid).first()
         total_cost = _f(inv.total_billed_cost) if inv else 0.0
         coverage_pct = _f(inv.attribution_coverage_pct) if inv else 0.0
         unattributed = _f(inv.unattributed_cost) if inv else 0.0
@@ -468,7 +474,7 @@ def ingestion_stats(request: Request, current_period: str):
 
 @app.get("/api/variance-by-service")
 def variance_by_service(request: Request, current_period: str):
-    _uid(request)
+    uid = _uid(request)
     current_date = _parse_period(current_period)
 
     with get_db() as session:
@@ -481,7 +487,7 @@ def variance_by_service(request: Request, current_period: str):
                 func.sum(VarianceReport.prior_cost),
                 func.sum(VarianceReport.current_cost),
             )
-            .filter(VarianceReport.current_period_start == current_date)
+            .filter(VarianceReport.current_period_start == current_date, VarianceReport.user_id == uid)
             .group_by(VarianceReport.service_name)
             .order_by(func.sum(func.abs(VarianceReport.delta_dollars)).desc())
             .all()
@@ -499,7 +505,7 @@ def variance_by_service(request: Request, current_period: str):
 
         all_rows = (
             session.query(VarianceReport)
-            .filter(VarianceReport.current_period_start == current_date)
+            .filter(VarianceReport.current_period_start == current_date, VarianceReport.user_id == uid)
             .order_by(func.abs(VarianceReport.delta_dollars).desc())
             .all()
         )
@@ -527,7 +533,7 @@ def variance_by_service(request: Request, current_period: str):
                 func.sum(func.abs(VarianceReport.delta_dollars)),
                 func.count(VarianceReport.id),
             )
-            .filter(VarianceReport.current_period_start == current_date)
+            .filter(VarianceReport.current_period_start == current_date, VarianceReport.user_id == uid)
             .group_by(VarianceReport.reason_code)
             .order_by(func.sum(func.abs(VarianceReport.delta_dollars)).desc())
             .all()
@@ -558,13 +564,13 @@ def variance_by_service(request: Request, current_period: str):
 
 @app.get("/api/root-causes")
 def root_causes(request: Request, current_period: str):
-    _uid(request)
+    uid = _uid(request)
     current_date = _parse_period(current_period)
 
     with get_db() as session:
         all_rows = (
             session.query(VarianceReport)
-            .filter(VarianceReport.current_period_start == current_date)
+            .filter(VarianceReport.current_period_start == current_date, VarianceReport.user_id == uid)
             .order_by(func.abs(VarianceReport.delta_dollars).desc())
             .all()
         )
@@ -602,7 +608,7 @@ def root_causes(request: Request, current_period: str):
                 func.sum(func.abs(VarianceReport.delta_dollars)),
                 func.count(VarianceReport.id),
             )
-            .filter(VarianceReport.current_period_start == current_date)
+            .filter(VarianceReport.current_period_start == current_date, VarianceReport.user_id == uid)
             .group_by(VarianceReport.reason_code)
             .order_by(func.sum(func.abs(VarianceReport.delta_dollars)).desc())
             .all()
@@ -636,22 +642,22 @@ def root_causes(request: Request, current_period: str):
 
 @app.get("/api/close-packet")
 def close_packet(request: Request, current_period: str, prior_period: str | None = None):
-    _uid(request)
+    uid = _uid(request)
     current_date = _parse_period(current_period)
 
     with get_db() as session:
-        inv_current = session.query(Invoice).filter(Invoice.billing_period_start == current_date).first()
+        inv_current = session.query(Invoice).filter(Invoice.billing_period_start == current_date, Invoice.user_id == uid).first()
         total_cost = _f(inv_current.total_billed_cost) if inv_current else 0.0
 
         prior_cost = 0.0
         if prior_period:
             prior_date = _parse_period(prior_period)
-            inv_prior = session.query(Invoice).filter(Invoice.billing_period_start == prior_date).first()
+            inv_prior = session.query(Invoice).filter(Invoice.billing_period_start == prior_date, Invoice.user_id == uid).first()
             prior_cost = _f(inv_prior.total_billed_cost) if inv_prior else 0.0
 
         all_rows = (
             session.query(VarianceReport)
-            .filter(VarianceReport.current_period_start == current_date)
+            .filter(VarianceReport.current_period_start == current_date, VarianceReport.user_id == uid)
             .order_by(func.abs(VarianceReport.delta_dollars).desc())
             .all()
         )
@@ -708,7 +714,7 @@ def close_packet(request: Request, current_period: str, prior_period: str | None
 
 @app.get("/api/gl-export")
 def gl_export(request: Request, current_period: str):
-    _uid(request)
+    uid = _uid(request)
     import csv
     import io
     from fastapi.responses import StreamingResponse
@@ -720,8 +726,7 @@ def gl_export(request: Request, current_period: str):
 
     with get_db() as session:
         vrows = session.query(VarianceReport).filter(
-            VarianceReport.current_period_start == current_date
-        ).all()
+            VarianceReport.current_period_start == current_date, VarianceReport.user_id == uid).all()
         for v in vrows:
             delta = _f(v.delta_dollars)
             debit = abs(delta) if delta > 0 else 0
@@ -747,7 +752,7 @@ def gl_export(request: Request, current_period: str):
 
 @app.get("/api/close-packet/pdf")
 def close_packet_pdf(request: Request, current_period: str, prior_period: str):
-    _uid(request)
+    uid = _uid(request)
     import tempfile as _tempfile
     from starlette.background import BackgroundTask
     from fastapi.responses import FileResponse
@@ -772,13 +777,13 @@ def close_packet_pdf(request: Request, current_period: str, prior_period: str):
 
 @app.get("/api/engineering-view")
 def engineering_view(request: Request, current_period: str):
-    _uid(request)
+    uid = _uid(request)
     current_date = _parse_period(current_period)
 
     with get_db() as session:
         all_rows = (
             session.query(VarianceReport)
-            .filter(VarianceReport.current_period_start == current_date)
+            .filter(VarianceReport.current_period_start == current_date, VarianceReport.user_id == uid)
             .order_by(func.abs(VarianceReport.delta_dollars).desc())
             .all()
         )
@@ -886,6 +891,10 @@ def connect_aws(request: Request, req: AWSConnectRequest):
             if os.path.exists(path):
                 os.unlink(path)
 
+    # Stamp user_id on ingested rows
+    with get_db() as session:
+        session.query(RawBillingLine).filter(RawBillingLine.user_id == None).update({"user_id": uid})  # noqa: E711
+
     return {"rows_inserted": total_inserted, "files": len(csv_paths), "provider": "AWS"}
 
 @app.post("/api/connect/azure")
@@ -920,6 +929,10 @@ def connect_azure(request: Request, req: AzureConnectRequest):
             if os.path.exists(path):
                 os.unlink(path)
 
+    # Stamp user_id on ingested rows
+    with get_db() as session:
+        session.query(RawBillingLine).filter(RawBillingLine.user_id == None).update({"user_id": uid})  # noqa: E711
+
     return {"rows_inserted": total_inserted, "files": len(csv_paths), "provider": "Azure"}
 
 
@@ -936,7 +949,7 @@ def _safe_error(e: Exception) -> str:
 
 @app.get("/api/github/status")
 def github_status(request: Request):
-    _uid(request)
+    uid = _uid(request)
     from cloudledger.config import GITHUB_TOKEN, GITHUB_REPO
     configured = bool(GITHUB_TOKEN and GITHUB_REPO)
     event_count = 0
@@ -953,7 +966,7 @@ def github_status(request: Request):
 
 @app.post("/api/github/sync")
 def github_sync(request: Request, billing_period: str | None = None):
-    _uid(request)
+    uid = _uid(request)
     from cloudledger.config import GITHUB_TOKEN, GITHUB_REPO
     if not GITHUB_TOKEN or not GITHUB_REPO:
         raise HTTPException(400, "GITHUB_TOKEN and GITHUB_REPO must be configured in .env")
@@ -978,11 +991,10 @@ def github_sync(request: Request, billing_period: str | None = None):
 
 @app.get("/api/trends")
 def get_trends(request: Request):
-    _uid(request)
+    uid = _uid(request)
     with get_db() as session:
         inv_rows = (
-            session.query(Invoice.billing_period_start, Invoice.total_billed_cost)
-            .order_by(Invoice.billing_period_start)
+            session.query(Invoice.billing_period_start, Invoice.total_billed_cost).filter(Invoice.user_id == uid).order_by(Invoice.billing_period_start)
             .all()
         )
         totals = [{"period": r[0].strftime("%Y-%m"), "cost": _f(r[1])} for r in inv_rows]
@@ -994,8 +1006,7 @@ def get_trends(request: Request):
                 func.sum(Resource.total_cost),
                 func.count(Resource.id),
             )
-            .group_by(Resource.service_name, Resource.billing_period_start)
-            .order_by(Resource.billing_period_start)
+            .filter(Resource.user_id == uid).group_by(Resource.service_name, Resource.billing_period_start).order_by(Resource.billing_period_start)
             .all()
         )
         by_service: dict = {}
@@ -1018,11 +1029,7 @@ def get_trends(request: Request):
                 func.sum(func.abs(VarianceReport.delta_dollars)),
                 func.count(VarianceReport.id),
             )
-            .group_by(
-                VarianceReport.prior_period_start,
-                VarianceReport.current_period_start,
-                VarianceReport.reason_code,
-            )
+            .filter(VarianceReport.user_id == uid).group_by(VarianceReport.prior_period_start, VarianceReport.current_period_start, VarianceReport.reason_code,)
             .order_by(VarianceReport.current_period_start)
             .all()
         )
@@ -1076,7 +1083,7 @@ def get_trends(request: Request):
 def run_pipeline_all(request: Request):
     uid = _uid(request)
     """Run variance for all consecutive period pairs."""
-    tf_dir = os.path.join(UPLOAD_DIR, "terraform")
+    tf_dir = os.path.join(UPLOAD_DIR, "terraform", str(uid))
     tf_paths = []
     if os.path.isdir(tf_dir):
         tf_paths = [os.path.join(tf_dir, f) for f in os.listdir(tf_dir) if f.endswith(".tfstate")]
@@ -1117,7 +1124,8 @@ def run_pipeline_all(request: Request):
 # ── Snowflake-Powered Endpoints ──────────────────────────────────────────────
 
 @app.get("/api/snowflake/status")
-def snowflake_status():
+def snowflake_status(request: Request):
+    _uid(request)
     from cloudledger.snowflake_query import is_configured
     configured = is_configured()
     table_count = 0
@@ -1131,25 +1139,29 @@ def snowflake_status():
     return {"configured": configured, "tables": table_count}
 
 @app.get("/api/snowflake/overview")
-def snowflake_overview(prior_period: str, current_period: str):
+def snowflake_overview(request: Request, prior_period: str, current_period: str):
+    _uid(request)
     _parse_period(prior_period)
     _parse_period(current_period)
     from cloudledger.snowflake_query import get_overview
     return get_overview(prior_period, current_period)
 
 @app.get("/api/snowflake/variance")
-def snowflake_variance(current_period: str):
+def snowflake_variance(request: Request, current_period: str):
+    _uid(request)
     _parse_period(current_period)
     from cloudledger.snowflake_query import get_variance
     return get_variance(current_period)
 
 @app.get("/api/snowflake/trends")
-def snowflake_trends():
+def snowflake_trends(request: Request):
+    _uid(request)
     from cloudledger.snowflake_query import get_trends
     return get_trends()
 
 @app.get("/api/snowflake/engineering")
-def snowflake_engineering(current_period: str):
+def snowflake_engineering(request: Request, current_period: str):
+    _uid(request)
     _parse_period(current_period)
     from cloudledger.snowflake_query import get_engineering
     return get_engineering(current_period)
@@ -1158,7 +1170,8 @@ def snowflake_engineering(current_period: str):
 # ── Snowflake Sync ───────────────────────────────────────────────────────────
 
 @app.post("/api/snowflake/sync")
-def snowflake_sync(period: str | None = None):
+def snowflake_sync(request: Request, period: str | None = None):
+    _uid(request)
     sf_account = os.environ.get("SNOWFLAKE_ACCOUNT")
     if not sf_account:
         raise HTTPException(400, "SNOWFLAKE_ACCOUNT not configured in environment variables.")
@@ -1175,7 +1188,7 @@ def snowflake_sync(period: str | None = None):
 
 @app.get("/api/narrative")
 def get_narrative(request: Request, current_period: str, prior_period: str):
-    _uid(request)
+    uid = _uid(request)
     _parse_period(current_period)
     _parse_period(prior_period)
 
@@ -1195,7 +1208,7 @@ def get_narrative(request: Request, current_period: str, prior_period: str):
 
 @app.get("/api/forecast")
 def get_forecast(request: Request):
-    _uid(request)
+    uid = _uid(request)
     from backend.forecast import forecast_total, forecast_by_service
     try:
         total = forecast_total()
@@ -1211,7 +1224,7 @@ def get_forecast(request: Request):
 @app.get("/api/anomalies")
 def get_anomalies(request: Request, current_period: str,
                   min_delta_pct: float = 50, min_delta_dollars: float = 500):
-    _uid(request)
+    uid = _uid(request)
     _parse_period(current_period)
     from cloudledger.anomaly import detect_anomalies, anomaly_summary
     anomalies = detect_anomalies(current_period, min_delta_pct, min_delta_dollars)
@@ -1234,7 +1247,7 @@ class ChatRequest(BaseModel):
 
 @app.post("/api/chat")
 def cloudly_chat(request: Request, req: ChatRequest):
-    _uid(request)
+    uid = _uid(request)
     import anthropic
 
     api_key = ANTHROPIC_API_KEY

@@ -86,6 +86,7 @@ def _seed_full_pipeline(db_session):
                 ))
 
                 session.add(Resource(
+                    user_id=1,
                     resource_id=f"arn:aws:ec2:us-east-1:123:instance/i-{i:04d}",
                     resource_name=f"i-{i:04d}",
                     service_name="Amazon EC2",
@@ -100,6 +101,7 @@ def _seed_full_pipeline(db_session):
         for i in range(5):
             delta = Decimal("160.00") if i < 3 else Decimal("-20.00")
             session.add(VarianceReport(
+                user_id=1,
                 resource_id=f"arn:aws:ec2:us-east-1:123:instance/i-{i:04d}",
                 resource_name=f"i-{i:04d}",
                 service_name="Amazon EC2",
