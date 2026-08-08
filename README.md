@@ -41,7 +41,7 @@ CloudLedger fixes this by:
 
 ### Variance Engine
 - **Day-normalized comparison** — adjusts for different month lengths (Feb 28 vs Mar 31) to eliminate false positives
-- **7 reason codes**: `planned`, `steady_state`, `usage_growth`, `new_resource`, `removed_resource`, `drift` variants, edge cases
+- **16 reason codes**: `planned`, `steady_state`, `usage_growth`, `new_resource`, `removed_resource`, `drift` variants, edge cases
 - **Evidence chains** — every classification comes with a human-readable explanation
 
 ### Cloudly Assistant
