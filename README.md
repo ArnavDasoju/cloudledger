@@ -103,10 +103,11 @@ The 5 agent tools: `query_spend_by_service`, `query_top_variance`, `query_resour
 | **Engineering** | IaC coverage, team attribution, drift inventory |
 | **Trends** | Historical charts, per-service trends, anomaly detection |
 
-<!-- [SCREENSHOTS: Add a screenshot for each screen above. Example:
-![Overview](docs/screenshots/overview.png)
-![Variance](docs/screenshots/variance.png)
--->
+![Upload — Connect Account](docs/screenshots/account-connection.png)
+![Upload — Link Billing Files](docs/screenshots/direct-monthly-file-linking.png)
+![Variance](docs/screenshots/variance-tab.png)
+![Root Causes](docs/screenshots/root-causes-tab.png)
+![Trends + Cloudly AI](docs/screenshots/trends-cloudly-ai.png)
 
 ---
 
