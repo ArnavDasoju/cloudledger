@@ -2,7 +2,7 @@
 
 **Every month, cloud bills change and nobody can explain why.** CloudLedger traces each dollar of variance to a specific engineering decision — so the month-end close takes minutes, not days.
 
-![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js) ![Python](https://img.shields.io/badge/Python-3.12+-blue?logo=python) ![FastAPI](https://img.shields.io/badge/FastAPI-latest-009688?logo=fastapi) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-14+-336791?logo=postgresql)
+[![CI](https://github.com/ArnavDasoju/cloudledger/actions/workflows/ci.yml/badge.svg)](https://github.com/ArnavDasoju/cloudledger/actions/workflows/ci.yml) ![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js) ![Python](https://img.shields.io/badge/Python-3.12+-blue?logo=python) ![FastAPI](https://img.shields.io/badge/FastAPI-latest-009688?logo=fastapi) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-14+-336791?logo=postgresql)
 
 [SCREENSHOT — replace this with a GIF or screenshot of the Overview and Variance screens]
 
