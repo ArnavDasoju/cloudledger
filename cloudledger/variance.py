@@ -4,7 +4,6 @@ Supports extended reason codes for edge cases:
 - planned, orphan_sdk_created, orphan_unknown, usage_growth, new_resource, removed_resource, price_change
 - savings_plan_allocation, ri_coverage_shift, cross_service_transfer
 - marketplace_subscription, spot_price_volatility, credit_applied
-- tag_propagation_delay
 """
 
 import calendar

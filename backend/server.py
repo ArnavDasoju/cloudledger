@@ -89,7 +89,7 @@ DRIFT_CODES = {"drift", "orphan_sdk_created", "orphan_unknown", "legacy_untracke
 USAGE_CODES = {"usage_growth", "new_resource", "removed_resource", "price_change", "steady_state"}
 # Reason codes that are edge-case exclusions
 EDGE_CODES = {"savings_plan_allocation", "ri_coverage_shift", "cross_service_transfer",
-              "marketplace_subscription", "spot_price_volatility", "credit_applied", "tag_propagation_delay"}
+              "marketplace_subscription", "spot_price_volatility", "credit_applied"}
 
 
 # ── Health ───────────────────────────────────────────────────────────────────

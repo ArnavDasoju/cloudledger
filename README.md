@@ -1,59 +1,79 @@
-# ☁️ CloudLedger
+# CloudLedger
 
-**Cloud billing variance analysis — trace every dollar of cloud cost change to a specific engineering decision.**
+**Every month, cloud bills change and nobody can explain why.** CloudLedger traces each dollar of variance to a specific engineering decision — so the month-end close takes minutes, not days.
 
-CloudLedger automates the month-end cloud close process. Upload your billing exports and Terraform state (or connect directly to AWS/Azure), and get a CFO-ready variance report in minutes instead of days.
+![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js) ![Python](https://img.shields.io/badge/Python-3.12+-blue?logo=python) ![FastAPI](https://img.shields.io/badge/FastAPI-latest-009688?logo=fastapi) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-14+-336791?logo=postgresql)
 
-![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js) ![Python](https://img.shields.io/badge/Python-3.14-blue?logo=python) ![FastAPI](https://img.shields.io/badge/FastAPI-latest-009688?logo=fastapi) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791?logo=postgresql)
+[SCREENSHOT — replace this with a GIF or screenshot of the Overview and Variance screens]
 
----
-
-## What It Does
-
-Every month, cloud bills change. Nobody can explain why. Engineering shipped a dozen changes, but nobody tracks which change cost what. The finance controller spends days manually reconciling spreadsheets.
-
-CloudLedger fixes this by:
-
-1. **Ingesting** billing CSVs (AWS FOCUS 1.2 / Azure Cost Export) or pulling directly from your cloud account
-2. **Matching** every billed resource against your Terraform state to identify what's managed vs. drifted
-3. **Classifying** each cost change with a reason code (planned, drift, usage growth, steady state, edge cases)
-4. **Day-normalizing** variance to eliminate false positives from different month lengths
-5. **Generating** a close packet with executive summary, action items, and journal entry exports
+[LIVE DEMO — replace this with a link if deployed, or remove this line]
 
 ---
 
-## Screens
+## How It Works
 
-| Screen | Purpose |
-|--------|---------|
-| **Upload** | Upload billing CSVs or connect AWS/Azure accounts directly |
-| **Overview** | Month-over-month spend comparison with service breakdown |
-| **Ingestion** | Data quality checks, Terraform match rate, tag coverage |
-| **Variance** | Resource-level detail with expandable evidence rows |
-| **Root Causes** | Why costs changed — planned, drift, usage, edge cases |
-| **Close Packet** | CFO-ready summary, action items, PDF/CSV export |
-| **Engineering** | IaC coverage, team attribution, drift inventory |
-| **Trends** | Historical charts, per-service trends, anomaly detection |
+1. **Ingest** billing CSVs (AWS FOCUS 1.2 / Azure Cost Export) or pull directly from your AWS or Azure account
+2. **Match** every billed resource against your IaC state (Terraform, ARM, CloudFormation, or Pulumi)
+3. **Classify** each cost change into one of 16 reason codes with a structured evidence chain
+4. **Day-normalize** variance to eliminate false positives from different month lengths (Feb 28 vs Mar 31)
+5. **Generate** a close packet with executive summary, action items, PDF export, and GL journal entry CSV
+
+---
+
+## AI and Data Engineering
+
+### Agentic RAG Assistant (Cloudly)
+
+The embedded chatbot uses an agentic tool-use loop powered by Claude:
+
+1. User asks a question about their billing data
+2. Relevant documentation is retrieved from a ChromaDB vector store (RAG)
+3. Claude receives the question, retrieved context, and screen data along with 5 database tools it can call
+4. If Claude needs live data (costs, filtering, trends, drift summary), it calls the appropriate tool — up to 3 rounds
+5. The final answer cites both documentation sources and tool results
+
+The 5 agent tools: `query_spend_by_service`, `query_top_variance`, `query_resources_by_filter`, `query_drift_summary`, `query_cost_trend` — each executes SQL against the billing database and returns formatted results.
+
+**Eval harness**: `backend/evaluate.py` runs an eval set through the agent and scores faithfulness, correctness, and retrieval quality using Claude as an LLM judge (1–5 scale on each dimension).
+
+### AI Narrative and Cost Forecast
+
+- **Narrative generation** (`/api/narrative`) — Claude generates a CFO-ready variance summary from close packet data
+- **Cost forecasting** (`/api/forecast`) — projects total and per-service costs based on historical trends
+- **Anomaly detection** (`/api/anomalies`) — flags resources with >50% change and >$500 impact
+
+### Data Pipeline (dbt + Airflow + Snowflake)
+
+- **dbt models** (`dbt_project/`) — staging, intermediate, and mart layers: `stg_billing_lines`, `stg_resources`, `int_invoice_totals`, `int_monthly_resource_spend`, `dim_resources`, `fct_variance_report`
+- **Airflow DAG** (`airflow/dags/cloudledger_pipeline.py`) — orchestrates the ingestion-to-variance pipeline
+- **Snowflake sync** — pushes billing data to Snowflake and exposes overview, variance, trends, and engineering views via dedicated API endpoints
+
+---
+
+## Variance Engine
+
+- **16 reason codes** classified by a rule-based engine:
+  - **Planned**: `planned` (IaC-managed + matching PR)
+  - **Drift/unmanaged**: `orphan_sdk_created`, `orphan_unknown`, `legacy_untracked`, `non_terraform_iac`
+  - **Organic**: `usage_growth`, `new_resource`, `removed_resource`, `price_change`, `steady_state`
+  - **Edge cases**: `savings_plan_allocation`, `ri_coverage_shift`, `credit_applied`, `marketplace_subscription`, `spot_price_volatility`, `cross_service_transfer`
+- **Day-normalized comparison** — adjusts prior-month cost by the ratio of days (e.g. 31/28) before computing delta
+- **Evidence chains** — every classification includes a structured JSONB audit trail with classification steps, inputs, and human-readable explanation
+- **Confidence scores** — 0.50–0.95 based on IaC status, tag coverage, and edge-case detection
 
 ---
 
 ## Key Features
 
-### Variance Engine
-- **Day-normalized comparison** — adjusts for different month lengths (Feb 28 vs Mar 31) to eliminate false positives
-- **16 reason codes**: `planned`, `steady_state`, `usage_growth`, `new_resource`, `removed_resource`, `drift` variants, edge cases
-- **Evidence chains** — every classification comes with a human-readable explanation
-
-### Cloudly Assistant
-- Embedded chatbot that answers questions about your billing data
-- Cross-screen aware — sees data from all screens, not just the one you're viewing
-- Suggested questions tailored to each screen
-- Markdown rendering with highlighted key findings
+### Multi-IaC Support
+- Terraform (`.tfstate`) — full resource matching with module attribution
+- ARM Templates (Azure) — JSON parsing with name-based fuzzy matching
+- CloudFormation — logical ID and resource property extraction
+- Pulumi — state file parsing with ARN cross-referencing
 
 ### Cloud Account Connection
-- **AWS**: Connect with Access Key + Secret Key, pulls from Cost Explorer API
-- **Azure**: Connect with Service Principal credentials, pulls from Cost Management API
-- Select 2–12 months of historical data
+- **AWS**: Access Key + Secret Key, pulls from Cost Explorer API (2–12 months)
+- **Azure**: Service Principal credentials, pulls from Cost Management API (2–12 months)
 
 ### GitHub CI/CD Integration
 - Syncs merged PRs that touch `.tf` files
@@ -61,14 +81,27 @@ CloudLedger fixes this by:
 - Reclassifies "drift" to "planned" when a matching PR is found
 
 ### MCP Server
-- Exposes 6 tools for any MCP-compatible client
+- Exposes 6 tools for any MCP-compatible client: `get_billing_overview`, `get_variance_by_resource`, `get_root_cause_summary`, `get_iac_coverage`, `get_available_periods`, `get_anomalies`
 - Query billing data, variance, IaC coverage, and anomalies programmatically
 
-### Multi-IaC Support
-- Terraform (`.tfstate`)
-- ARM Templates (Azure)
-- CloudFormation
-- Pulumi
+### Authentication
+- JWT-based multi-tenant auth with per-user data isolation
+- All billing data, variance reports, and resources are scoped to the authenticated user
+
+---
+
+## Screens
+
+| Screen | Purpose |
+|--------|---------|
+| **Upload** | Upload billing CSVs or connect AWS/Azure accounts |
+| **Overview** | Month-over-month spend comparison with service breakdown |
+| **Ingestion** | Data quality checks, Terraform match rate, tag coverage |
+| **Variance** | Resource-level detail with reason codes and evidence |
+| **Root Causes** | Variance bucketed by planned, drift, usage, and edge cases |
+| **Close Packet** | CFO-ready summary, action items, PDF/CSV export |
+| **Engineering** | IaC coverage, team attribution, drift inventory |
+| **Trends** | Historical charts, per-service trends, anomaly detection |
 
 ---
 
@@ -83,52 +116,47 @@ CloudLedger fixes this by:
 ### Installation
 
 ```bash
-# Clone the repo
 git clone https://github.com/ArnavDasoju/cloudledger.git
 cd cloudledger
 
-# Set up Python environment
+# Python
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 
-# Set up frontend
+# Frontend
 cd frontend
 npm install
 cd ..
 
-# Create database
+# Database
 createdb cloudledger
 
-# Configure environment
+# Environment
 cp .env.example .env
-# Edit .env with your database credentials
-```
-
-### Environment Variables
-
-Create a `.env` file in the project root:
-
-```env
-DATABASE_URL=postgresql://user:password@localhost:5432/cloudledger
-ANTHROPIC_API_KEY=sk-ant-...    # For Cloudly assistant
-GITHUB_TOKEN=ghp_...            # Optional: for CI/CD integration
-GITHUB_REPO=your-org/your-repo  # Optional: for CI/CD integration
+# Edit .env with your database credentials and ANTHROPIC_API_KEY
 ```
 
 ### Running
 
 ```bash
-# Terminal 1: Start the backend
+# Terminal 1: Backend
 source venv/bin/activate
 python -m uvicorn backend.server:app --host 0.0.0.0 --port 8000
 
-# Terminal 2: Start the frontend
+# Terminal 2: Frontend
 cd frontend
 npm run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000)
+
+### Running Tests
+
+```bash
+source venv/bin/activate
+pytest tests/ -v
+```
 
 ### Using the MCP Server
 
@@ -150,47 +178,43 @@ Add to your MCP client config (e.g. `~/Library/Application Support/Claude/claude
 ## Architecture
 
 ```
-┌──────────────┐     ┌──────────────┐     ┌──────────────┐
-│   Next.js    │────▶│   FastAPI    │────▶│  PostgreSQL  │
-│   Frontend   │     │   Backend    │     │   Database   │
-└──────────────┘     └──────┬───────┘     └──────────────┘
-                            │
-                   ┌────────┼────────┐
-                   │        │        │
-              ┌────▼──┐ ┌───▼───┐ ┌──▼───┐
-              │Cloudly│ │GitHub │ │ MCP  │
-              │  API  │ │  API  │ │Server│
-              └───────┘ └───────┘ └──────┘
+                        +------------------+
+                        |    Next.js 16    |
+                        |    Frontend      |
+                        +--------+---------+
+                                 |
+                        +--------v---------+
+                        |    FastAPI        |
+                        |    (32 endpoints) |
+                        +--+-----+------+--+
+                           |     |      |
+              +------------+  +--+--+  ++----------+
+              |               |     |              |
+     +--------v------+  +----v--+ +v-------+ +----v------+
+     | Claude Agent   |  |GitHub| | MCP    | | Snowflake |
+     | (RAG + Tools)  |  | API  | | Server | | Sync      |
+     +--------+-------+  +------+ +--------+ +-----------+
+              |
+     +--------v-------+
+     | ChromaDB       |
+     | (Vector Store) |
+     +----------------+
+
+     +------------------+     +------------------+
+     |   PostgreSQL     |     |   dbt Models     |
+     |   (Primary DB)   |     |   (Analytics)    |
+     +------------------+     +------------------+
 ```
 
-**Backend** (`backend/server.py`) — FastAPI with 15+ endpoints for data ingestion, variance analysis, trends, chat, and cloud account connection.
+**Backend** (`backend/server.py`) — FastAPI with 32 endpoints for auth, data ingestion, variance analysis, trends, chat, cloud account connection, Snowflake sync, forecasting, and anomaly detection.
 
-**Analysis Engine** (`cloudledger/`) — Python modules for CSV ingestion, IaC state parsing, resource normalization, day-normalized variance computation, and reason code classification.
+**Analysis Engine** (`cloudledger/`) — Python modules for CSV ingestion, IaC state parsing (Terraform/ARM/CloudFormation/Pulumi), resource normalization, day-normalized variance computation, and 16-code reason classification.
 
-**Frontend** (`frontend/`) — Next.js 16 single-page app with glassmorphic design, staggered animations, interactive charts (Recharts), and the Cloudly chat panel.
+**AI Layer** (`backend/agent.py`, `backend/rag.py`, `backend/tools.py`) — Agentic RAG: ChromaDB retrieval + 5 database tools + Claude tool-use loop. Eval harness with LLM-as-judge scoring.
 
----
+**Frontend** (`frontend/`) — Next.js 16 / React 19 single-page app with 8 screens, interactive charts (Recharts), and the Cloudly chat panel.
 
-## API Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/upload` | Upload billing CSVs |
-| `POST` | `/api/upload/terraform` | Upload Terraform state |
-| `POST` | `/api/pipeline/run` | Run variance for two periods |
-| `POST` | `/api/pipeline/run-all` | Run variance for all period pairs |
-| `POST` | `/api/connect/aws` | Connect to AWS account |
-| `POST` | `/api/connect/azure` | Connect to Azure account |
-| `POST` | `/api/github/sync` | Sync GitHub PRs |
-| `POST` | `/api/chat` | Cloudly chat |
-| `GET` | `/api/trends` | Historical cost trends |
-| `GET` | `/api/ingestion-stats` | Data quality metrics |
-| `GET` | `/api/variance-by-service` | Variance breakdown |
-| `GET` | `/api/root-causes` | Root cause analysis |
-| `GET` | `/api/close-packet` | Close packet data |
-| `GET` | `/api/engineering-view` | IaC coverage metrics |
-| `GET` | `/api/gl-export` | Journal entry CSV export |
-| `GET` | `/api/close-packet/pdf` | Close packet PDF export |
+**Data Pipeline** (`dbt_project/`, `airflow/`) — dbt models for staging/intermediate/mart layers; Airflow DAG for pipeline orchestration.
 
 ---
 
@@ -198,20 +222,19 @@ Add to your MCP client config (e.g. `~/Library/Application Support/Claude/claude
 
 | Layer | Technology |
 |-------|-----------|
-| Frontend | Next.js 16, React, Tailwind CSS, Recharts |
+| Frontend | Next.js 16, React 19, Tailwind CSS, Recharts |
 | Backend | FastAPI, SQLAlchemy, Pydantic |
 | Database | PostgreSQL |
-| NLP | Anthropic Claude API |
+| AI / LLM | Anthropic Claude (chat agent, narrative, eval judge) |
+| RAG | ChromaDB (vector store + default embedder) |
 | Cloud SDKs | boto3 (AWS), Azure REST API |
 | IaC Parsing | Terraform, ARM, CloudFormation, Pulumi |
+| Data Pipeline | dbt, Apache Airflow, Snowflake |
 | Protocol | MCP (Model Context Protocol) |
+| Auth | JWT (PyJWT + bcrypt) |
 
 ---
 
 ## License
 
-MIT
-
----
-
-Built for the month-end close. Trace every dollar.
+[MIT](LICENSE)
