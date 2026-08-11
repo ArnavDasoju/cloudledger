@@ -34,9 +34,11 @@ data/raw/
 *.csv
 !data/samples/*.csv
 
-# Notebooks
+# Notebooks — keep source .ipynb, ignore executed outputs and HTML exports
 .ipynb_checkpoints/
 notebooks/.ipynb_checkpoints/
+notebooks/*_executed.ipynb
+notebooks/*.html
 
 # Next.js
 .next/

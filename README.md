@@ -4,6 +4,9 @@
 
 [![CI](https://github.com/ArnavDasoju/cloudledger/actions/workflows/ci.yml/badge.svg)](https://github.com/ArnavDasoju/cloudledger/actions/workflows/ci.yml) ![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js) ![Python](https://img.shields.io/badge/Python-3.12+-blue?logo=python) ![FastAPI](https://img.shields.io/badge/FastAPI-latest-009688?logo=fastapi) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-14+-336791?logo=postgresql)
 
+<!-- [SCREENSHOT: Replace with a GIF or screenshot of the Overview + Variance screens] -->
+
+<!-- [LIVE DEMO: Replace with URL if deployed, or delete this line] -->
 
 ---
 
@@ -99,6 +102,11 @@ The 5 agent tools: `query_spend_by_service`, `query_top_variance`, `query_resour
 | **Close Packet** | CFO-ready summary, action items, PDF/CSV export |
 | **Engineering** | IaC coverage, team attribution, drift inventory |
 | **Trends** | Historical charts, per-service trends, anomaly detection |
+
+<!-- [SCREENSHOTS: Add a screenshot for each screen above. Example:
+![Overview](docs/screenshots/overview.png)
+![Variance](docs/screenshots/variance.png)
+-->
 
 ---
 
