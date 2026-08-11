@@ -4,9 +4,6 @@
 
 [![CI](https://github.com/ArnavDasoju/cloudledger/actions/workflows/ci.yml/badge.svg)](https://github.com/ArnavDasoju/cloudledger/actions/workflows/ci.yml) ![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js) ![Python](https://img.shields.io/badge/Python-3.12+-blue?logo=python) ![FastAPI](https://img.shields.io/badge/FastAPI-latest-009688?logo=fastapi) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-14+-336791?logo=postgresql)
 
-[SCREENSHOT — replace this with a GIF or screenshot of the Overview and Variance screens]
-
-[LIVE DEMO — replace this with a link if deployed, or remove this line]
 
 ---
 
