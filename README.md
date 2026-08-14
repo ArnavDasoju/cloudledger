@@ -22,19 +22,25 @@
 
 ## AI and Data Engineering
 
-### Agentic RAG Assistant (Cloudly)
+### RAG Pipeline + Agentic Tool-Use (Cloudly)
 
-The embedded chatbot uses an agentic tool-use loop powered by Claude:
+The embedded assistant combines a **retrieval-augmented generation pipeline** over a domain knowledge base with **agentic tool-use** for live billing data:
 
-1. User asks a question about their billing data
-2. Relevant documentation is retrieved from a ChromaDB vector store (RAG)
-3. Claude receives the question, retrieved context, and screen data along with 5 database tools it can call
-4. If Claude needs live data (costs, filtering, trends, drift summary), it calls the appropriate tool — up to 3 rounds
-5. The final answer cites both documentation sources and tool results
+**RAG pipeline** (`backend/rag.py`):
+- 8 markdown documents (variance engine logic, architecture, glossary, screen navigation) chunked into 800-char windows with 100-char overlap, preserving section headers as metadata
+- Indexed into a **ChromaDB** persistent vector store using **local Sentence Transformer embeddings** (all-MiniLM-L6-v2) — no external embedding API
+- Retrieval applies a cosine distance threshold (1.2), over-fetches by 3, and deduplicates chunks sharing >50% word overlap
+- Auto-ingests on server startup if the vector store is empty
 
-The 5 agent tools: `query_spend_by_service`, `query_top_variance`, `query_resources_by_filter`, `query_drift_summary`, `query_cost_trend` — each executes SQL against the billing database and returns formatted results.
+**Agentic tool-use loop** (`backend/agent.py`):
+1. Retrieved docs are injected into Claude's system prompt as numbered references
+2. Claude also receives the user's current screen data and 5 database tools
+3. If Claude needs live billing data, it calls a tool — up to 3 rounds before returning a final answer
+4. Answers cite both document sources (`[1]`, `[2]`) and tool results
 
-**Eval harness**: `backend/evaluate.py` runs an eval set through the agent and scores faithfulness, correctness, and retrieval quality using Claude as an LLM judge (1–5 scale on each dimension).
+The 5 agent tools (`backend/tools.py`): `query_spend_by_service`, `query_top_variance`, `query_resources_by_filter`, `query_drift_summary`, `query_cost_trend` — each executes SQL against PostgreSQL and returns formatted results.
+
+**Eval harness** (`backend/evaluate.py`): Runs an eval set through the full pipeline and scores faithfulness, correctness, and retrieval quality using Claude as an LLM judge (1–5 scale on each dimension).
 
 ### AI Narrative and Cost Forecast
 
