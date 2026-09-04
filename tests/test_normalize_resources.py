@@ -217,3 +217,39 @@ class TestNormalizeResources:
         with db_session() as s:
             r = s.query(Resource).first()
             assert abs(float(r.total_cost) - 600.00) < 0.01
+
+    def test_upsert_updates_existing_resource(self, db_session):
+        """Calling normalize_resources twice should update the existing resource,
+        not create a duplicate row."""
+        rid = "arn:aws:ec2:us-east-1:123:instance/i-upsert"
+        with db_session() as s:
+            s.add(RawBillingLine(
+                invoice_id="INV-001",
+                billing_period_start=date(2025, 1, 1),
+                billing_period_end=date(2025, 1, 31),
+                service_name="Amazon EC2",
+                resource_id=rid,
+                billed_cost=Decimal("500.00"),
+            ))
+
+        normalize_resources()
+
+        # Verify initial state
+        with db_session() as s:
+            assert s.query(Resource).count() == 1
+            r = s.query(Resource).first()
+            assert float(r.total_cost) == 500.00
+            assert r.in_terraform_state is False
+
+        # Run again — should update, not dupe
+        tf_path = _write_tf_state([{
+            "type": "aws_instance", "name": "web", "id": rid,
+        }])
+        try:
+            normalize_resources(terraform_state_path=tf_path)
+            with db_session() as s:
+                assert s.query(Resource).count() == 1  # still 1 row
+                r = s.query(Resource).first()
+                assert r.in_terraform_state is True  # updated
+        finally:
+            os.unlink(tf_path)

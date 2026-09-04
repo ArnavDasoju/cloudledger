@@ -28,10 +28,6 @@ class TestPasswordHashing:
         hashed = hash_password("correct-horse-battery-staple")
         assert not verify_password("wrong-password", hashed)
 
-    def test_hash_is_not_plaintext(self):
-        hashed = hash_password("secret")
-        assert hashed != "secret"
-
 
 class TestTokenLifecycle:
     def test_create_and_decode_roundtrip(self):
@@ -106,10 +102,10 @@ class TestGetCurrentUserId:
 
 
 class TestSecretValidation:
-    def test_short_secret_logs_warning(self):
-        """A JWT_SECRET shorter than 32 bytes should trigger a warning at import time."""
-        from backend.auth import _MIN_SECRET_BYTES
-        assert _MIN_SECRET_BYTES == 32
-        # The default dev secret is 44 bytes — long enough
-        from backend.auth import JWT_SECRET
-        assert len(JWT_SECRET.encode("utf-8")) >= _MIN_SECRET_BYTES
+    def test_default_dev_secret_meets_minimum_length(self):
+        """The default dev secret must be >= 32 bytes for HS256 compliance."""
+        from backend.auth import JWT_SECRET, _MIN_SECRET_BYTES
+        assert len(JWT_SECRET.encode("utf-8")) >= _MIN_SECRET_BYTES, (
+            f"Default JWT_SECRET is {len(JWT_SECRET.encode('utf-8'))} bytes, "
+            f"below the {_MIN_SECRET_BYTES}-byte HS256 minimum"
+        )

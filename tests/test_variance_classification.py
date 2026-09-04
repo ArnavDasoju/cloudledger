@@ -494,6 +494,141 @@ class TestConfidenceScores:
         assert float(vr.confidence_score) == 0.70
 
 
+# ── classify_resource direct unit tests (pure function, no DB) ────────────────
+
+class TestClassifyResourcePure:
+    """Direct tests for the extracted classify_resource function.
+    No database needed — exercises the decision tree with explicit inputs."""
+
+    def test_edge_reason_overrides_everything(self):
+        rc, conf, excl = classify_resource(
+            in_prior=True, in_current=True, in_tf=True,
+            has_change_event=True, has_team=True, tags={},
+            prior_cost=Decimal("1000"), current_cost=Decimal("1500"),
+            abs_norm_pct=50.0, edge_reason="savings_plan_allocation",
+        )
+        assert rc == "savings_plan_allocation"
+        assert excl is True
+        assert conf == Decimal("0.90")
+
+    def test_new_resource_when_not_in_prior(self):
+        rc, conf, excl = classify_resource(
+            in_prior=False, in_current=True, in_tf=True,
+            has_change_event=False, has_team=False, tags={},
+            prior_cost=Decimal("0"), current_cost=Decimal("500"),
+            abs_norm_pct=0, edge_reason=None,
+        )
+        assert rc == "new_resource"
+        assert excl is False
+
+    def test_removed_resource_when_not_in_current(self):
+        rc, conf, excl = classify_resource(
+            in_prior=True, in_current=False, in_tf=True,
+            has_change_event=False, has_team=False, tags={},
+            prior_cost=Decimal("500"), current_cost=Decimal("0"),
+            abs_norm_pct=0, edge_reason=None,
+        )
+        assert rc == "removed_resource"
+
+    def test_planned_when_in_tf_with_event(self):
+        rc, conf, _ = classify_resource(
+            in_prior=True, in_current=True, in_tf=True,
+            has_change_event=True, has_team=True, tags={},
+            prior_cost=Decimal("1000"), current_cost=Decimal("1500"),
+            abs_norm_pct=50.0, edge_reason=None,
+        )
+        assert rc == "planned"
+        assert conf == Decimal("0.95")
+
+    def test_non_terraform_iac_with_cfn_tag(self):
+        rc, conf, _ = classify_resource(
+            in_prior=True, in_current=True, in_tf=False,
+            has_change_event=False, has_team=True,
+            tags={"aws:cloudformation:stack-name": "my-stack"},
+            prior_cost=Decimal("1000"), current_cost=Decimal("1100"),
+            abs_norm_pct=10.0, edge_reason=None,
+        )
+        assert rc == "non_terraform_iac"
+        assert conf == Decimal("0.85")
+
+    def test_non_terraform_iac_with_cdk_managed_by(self):
+        rc, _, _ = classify_resource(
+            in_prior=True, in_current=True, in_tf=False,
+            has_change_event=False, has_team=True,
+            tags={"managed_by": "cdk"},
+            prior_cost=Decimal("100"), current_cost=Decimal("110"),
+            abs_norm_pct=10.0, edge_reason=None,
+        )
+        assert rc == "non_terraform_iac"
+
+    def test_orphan_sdk_created_no_iac_tags(self):
+        rc, _, _ = classify_resource(
+            in_prior=True, in_current=True, in_tf=False,
+            has_change_event=False, has_team=True, tags={},
+            prior_cost=Decimal("1000"), current_cost=Decimal("1100"),
+            abs_norm_pct=10.0, edge_reason=None,
+        )
+        assert rc == "orphan_sdk_created"
+
+    def test_legacy_untracked_low_cost(self):
+        rc, conf, _ = classify_resource(
+            in_prior=True, in_current=True, in_tf=False,
+            has_change_event=False, has_team=False, tags={},
+            prior_cost=Decimal("100"), current_cost=Decimal("50"),
+            abs_norm_pct=50.0, edge_reason=None,
+        )
+        assert rc == "legacy_untracked"
+        assert conf == Decimal("0.60")
+
+    def test_orphan_unknown_high_cost_no_tags(self):
+        rc, conf, _ = classify_resource(
+            in_prior=True, in_current=True, in_tf=False,
+            has_change_event=False, has_team=False, tags={},
+            prior_cost=Decimal("500"), current_cost=Decimal("600"),
+            abs_norm_pct=20.0, edge_reason=None,
+        )
+        assert rc == "orphan_unknown"
+        assert conf == Decimal("0.50")
+
+    def test_usage_growth_big_normalized_delta(self):
+        rc, _, _ = classify_resource(
+            in_prior=True, in_current=True, in_tf=True,
+            has_change_event=False, has_team=False, tags={},
+            prior_cost=Decimal("1000"), current_cost=Decimal("1200"),
+            abs_norm_pct=20.0, edge_reason=None,
+        )
+        assert rc == "usage_growth"
+
+    def test_steady_state_small_normalized_delta(self):
+        rc, _, _ = classify_resource(
+            in_prior=True, in_current=True, in_tf=True,
+            has_change_event=False, has_team=False, tags={},
+            prior_cost=Decimal("1000"), current_cost=Decimal("1030"),
+            abs_norm_pct=3.0, edge_reason=None,
+        )
+        assert rc == "steady_state"
+
+    def test_boundary_5_percent_is_steady_state(self):
+        """Exactly 5% normalized delta should be steady_state (<=5 check)."""
+        rc, _, _ = classify_resource(
+            in_prior=True, in_current=True, in_tf=True,
+            has_change_event=False, has_team=False, tags={},
+            prior_cost=Decimal("1000"), current_cost=Decimal("1050"),
+            abs_norm_pct=5.0, edge_reason=None,
+        )
+        assert rc == "steady_state"
+
+    def test_boundary_just_over_5_percent_is_usage_growth(self):
+        """5.01% normalized delta should be usage_growth (>5 check)."""
+        rc, _, _ = classify_resource(
+            in_prior=True, in_current=True, in_tf=True,
+            has_change_event=False, has_team=False, tags={},
+            prior_cost=Decimal("1000"), current_cost=Decimal("1051"),
+            abs_norm_pct=5.01, edge_reason=None,
+        )
+        assert rc == "usage_growth"
+
+
 # ── Summary structure ────────────────────────────────────────────────────────
 
 class TestVarianceSummary:

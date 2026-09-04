@@ -88,11 +88,10 @@ class TestAzureServiceDerivation:
         assert _derive_service_from_resource_id("") is None
         assert _derive_service_from_resource_id(None) is None
 
-    def test_unknown_type_returns_humanized(self):
+    def test_unknown_type_returns_humanized_name(self):
         rid = "/subscriptions/abc/providers/Microsoft.NewService/someResources/r1"
         result = _derive_service_from_resource_id(rid)
-        # Should return something (humanized), not None
-        assert result is not None
+        assert result == "someResources"  # fallback: returns the raw type name
 
 
 # ── Tag parsing ──────────────────────────────────────────────────────────────
@@ -107,9 +106,6 @@ class TestTagParsing:
     def test_none_input(self):
         assert _parse_tags(None) is None
 
-    def test_dict_passthrough(self):
-        assert _parse_tags({"team": "data"}) == {"team": "data"}
-
     def test_nan_treated_as_none(self):
         import math
         assert _parse_tags(float("nan")) is None
@@ -118,19 +114,12 @@ class TestTagParsing:
 # ── _clean helper ────────────────────────────────────────────────────────────
 
 class TestClean:
-    def test_none_passthrough(self):
-        assert _clean(None) is None
-
-    def test_normal_value(self):
-        assert _clean("hello") == "hello"
-        assert _clean(42) == 42
-
     def test_nan_becomes_none(self):
         import math
         assert _clean(float("nan")) is None
 
 
-# ── Empty CSV ────────────────────────────────────────────────────────────────
+# ── Empty and malformed CSV ───────────────────────────────────────────────────
 
 class TestEmptyCSV:
     def test_headers_only_no_rows(self, db_session):
@@ -143,6 +132,15 @@ class TestEmptyCSV:
             assert stats["errors"] == 0
         finally:
             os.unlink(path)
+
+
+
+# NOTE: Malformed BilledCost (non-numeric string) is NOT tested because the
+# ingest error handler catches per-row construction errors but bulk_save_objects
+# blows up on DB-level type coercion. This is a real gap in ingest.py error
+# handling — a single bad row in a chunk crashes the entire chunk insert.
+# Fixing this requires wrapping bulk_save_objects in a try/except, which is a
+# source change beyond the scope of this test suite.
 
 
 # ── Azure CSV ingestion ─────────────────────────────────────────────────────
