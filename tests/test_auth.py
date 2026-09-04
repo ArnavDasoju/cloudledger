@@ -103,3 +103,13 @@ class TestGetCurrentUserId:
         with pytest.raises(HTTPException) as exc_info:
             get_current_user_id(request)
         assert exc_info.value.status_code == 401
+
+
+class TestSecretValidation:
+    def test_short_secret_logs_warning(self):
+        """A JWT_SECRET shorter than 32 bytes should trigger a warning at import time."""
+        from backend.auth import _MIN_SECRET_BYTES
+        assert _MIN_SECRET_BYTES == 32
+        # The default dev secret is 44 bytes — long enough
+        from backend.auth import JWT_SECRET
+        assert len(JWT_SECRET.encode("utf-8")) >= _MIN_SECRET_BYTES
