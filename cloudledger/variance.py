@@ -41,6 +41,83 @@ SPOT_INDICATORS = ["spot", "spotusage"]
 DATA_TRANSFER_INDICATORS = ["datatransfer", "data transfer", "cloudfront", "nat gateway"]
 
 
+def classify_resource(
+    *,
+    in_prior: bool,
+    in_current: bool,
+    in_tf: bool,
+    has_change_event: bool,
+    has_team: bool,
+    tags: Optional[Dict],
+    prior_cost: Decimal,
+    current_cost: Decimal,
+    abs_norm_pct: float,
+    edge_reason: Optional[str],
+) -> tuple:
+    """Pure classification function — no DB access, no side effects.
+
+    Returns (reason_code, confidence, is_excluded).
+    """
+    is_excluded = False
+
+    if edge_reason:
+        reason_code = edge_reason
+        is_excluded = True
+    elif not in_prior:
+        reason_code = "new_resource"
+    elif not in_current:
+        reason_code = "removed_resource"
+    elif in_tf and has_change_event:
+        reason_code = "planned"
+    elif not in_tf:
+        tag_dict = tags if isinstance(tags, dict) else {}
+
+        is_non_tf_iac = False
+        if tag_dict:
+            for tag_key in ('managed_by', 'managed-by', 'iac_tool', 'CreatedBy'):
+                val = tag_dict.get(tag_key, '').lower()
+                if val in ('cloudformation', 'cdk', 'pulumi', 'serverless'):
+                    is_non_tf_iac = True
+                    break
+            if 'aws:cloudformation:stack-name' in tag_dict:
+                is_non_tf_iac = True
+
+        if is_non_tf_iac:
+            reason_code = "non_terraform_iac"
+        elif has_team:
+            reason_code = "orphan_sdk_created"
+        elif prior_cost > 0 and current_cost < 200:
+            reason_code = "legacy_untracked"
+        else:
+            reason_code = "orphan_unknown"
+    elif in_tf and not has_change_event and abs_norm_pct > 5:
+        reason_code = "usage_growth"
+    elif in_tf and not has_change_event and abs_norm_pct <= 5:
+        reason_code = "steady_state"
+    else:
+        reason_code = "price_change"
+
+    # Confidence score
+    if is_excluded:
+        confidence = Decimal("0.90")
+    elif reason_code == "non_terraform_iac":
+        confidence = Decimal("0.85")
+    elif reason_code == "orphan_sdk_created":
+        confidence = Decimal("0.70")
+    elif reason_code == "legacy_untracked":
+        confidence = Decimal("0.60")
+    elif reason_code == "orphan_unknown":
+        confidence = Decimal("0.50")
+    elif in_tf:
+        confidence = Decimal("0.95")
+    elif has_team:
+        confidence = Decimal("0.70")
+    else:
+        confidence = Decimal("0.50")
+
+    return reason_code, confidence, is_excluded
+
+
 def _detect_charge_type_reason(charge_types: List[str], description: str) -> Optional[str]:
     """Detect edge-case reason code from charge types and description."""
     desc_lower = (description or "").lower()
@@ -328,72 +405,30 @@ def compute_variance(prior_period: str, current_period: str, baseline_mode: str 
             description = description_map.get(rid, "")
 
             # --- Edge case detection (Category 3) ---
-            is_excluded = False
             edge_reason = _detect_charge_type_reason(charge_types, description)
 
             # Use normalized delta for classification (ignore month-length noise)
             # but store raw delta for reporting
             abs_norm_pct = abs(float(delta_pct_normalized)) if delta_pct_normalized is not None else 0
 
-            if edge_reason:
-                reason_code = edge_reason
-                is_excluded = True
-            elif rid not in prior_resources:
-                reason_code = "new_resource"
-            elif rid not in current_resources:
-                reason_code = "removed_resource"
-            elif in_tf and has_change_event:
-                reason_code = "planned"
-            elif not in_tf:
-                has_tags = bool(ref and ref.team)
-                tags = {}
-                if ref and hasattr(ref, 'tags') and ref.tags:
-                    tags = ref.tags if isinstance(ref.tags, dict) else {}
+            # Read tags from Resource if available (currently Resource has no tags column,
+            # so this falls back to empty dict — see fix commit for the real solution)
+            resource_tags = {}
+            if ref and hasattr(ref, 'tags') and ref.tags:
+                resource_tags = ref.tags if isinstance(ref.tags, dict) else {}
 
-                is_non_tf_iac = False
-                if tags:
-                    for tag_key in ('managed_by', 'managed-by', 'iac_tool', 'CreatedBy'):
-                        val = tags.get(tag_key, '').lower()
-                        if val in ('cloudformation', 'cdk', 'pulumi', 'serverless'):
-                            is_non_tf_iac = True
-                            break
-                    if 'aws:cloudformation:stack-name' in tags:
-                        is_non_tf_iac = True
-
-                if is_non_tf_iac:
-                    reason_code = "non_terraform_iac"
-                elif has_tags:
-                    reason_code = "orphan_sdk_created"
-                elif prior_cost > 0 and current_cost < 200:
-                    reason_code = "legacy_untracked"
-                else:
-                    reason_code = "orphan_unknown"
-            elif in_tf and not has_change_event and abs_norm_pct > 5:
-                # Genuine usage growth beyond month-length noise
-                reason_code = "usage_growth"
-            elif in_tf and not has_change_event and abs_norm_pct <= 5:
-                # Within normal month-length variation — steady state
-                reason_code = "steady_state"
-            else:
-                reason_code = "price_change"
-
-            # Confidence score
-            if is_excluded:
-                confidence = Decimal("0.90")
-            elif reason_code == "non_terraform_iac":
-                confidence = Decimal("0.85")
-            elif reason_code == "orphan_sdk_created":
-                confidence = Decimal("0.70")
-            elif reason_code == "legacy_untracked":
-                confidence = Decimal("0.60")
-            elif reason_code == "orphan_unknown":
-                confidence = Decimal("0.50")
-            elif in_tf:
-                confidence = Decimal("0.95")
-            elif ref and ref.team:
-                confidence = Decimal("0.70")
-            else:
-                confidence = Decimal("0.50")
+            reason_code, confidence, is_excluded = classify_resource(
+                in_prior=rid in prior_resources,
+                in_current=rid in current_resources,
+                in_tf=in_tf,
+                has_change_event=has_change_event,
+                has_team=bool(ref and ref.team),
+                tags=resource_tags,
+                prior_cost=prior_cost,
+                current_cost=current_cost,
+                abs_norm_pct=abs_norm_pct,
+                edge_reason=edge_reason,
+            )
 
             # Build human-readable evidence string
             evidence_parts = []
