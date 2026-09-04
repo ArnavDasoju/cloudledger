@@ -9,45 +9,6 @@ from decimal import Decimal
 from unittest.mock import patch
 
 import pytest
-from fastapi.testclient import TestClient
-
-# Override DATABASE_URL before importing the app
-os.environ["DATABASE_URL"] = "sqlite://"
-os.environ["ALLOWED_ORIGINS"] = "*"
-
-
-@pytest.fixture
-def client(db_session, monkeypatch):
-    """Create a test client with patched database.
-
-    We need to ensure the server's get_db() uses the test's in-memory SQLite.
-    The server calls _db.get_db() where _db = cloudledger.database.
-    The conftest autouse fixture already patches cloudledger.database.get_db.
-    We also need to ensure create_all_tables in the lifespan is a no-op.
-    """
-    import cloudledger.database
-    import backend.server as server_mod
-
-    # Patch create_all_tables both at module level and as the server's imported reference
-    monkeypatch.setattr(cloudledger.database, "create_all_tables", lambda: None)
-    monkeypatch.setattr(server_mod, "create_all_tables", lambda: None)
-
-    from backend.server import app
-    from backend.auth import create_token
-
-    # Create a test user directly in the DB so we don't need the register endpoint
-    from cloudledger.database import User
-    from backend.auth import hash_password as _hash
-    with db_session() as session:
-        user = User(email="test@example.com", password_hash=_hash("testpass123"), name="Test")
-        session.add(user)
-        session.flush()
-        uid = user.id
-
-    token = create_token(uid, "test@example.com")
-
-    with TestClient(app, headers={"Authorization": f"Bearer {token}"}) as tc:
-        yield tc
 
 
 def _seed_full_pipeline(db_session):

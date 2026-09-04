@@ -8,6 +8,7 @@ from contextlib import contextmanager
 
 # Override DATABASE_URL before importing cloudledger modules
 os.environ["DATABASE_URL"] = "sqlite://"
+os.environ["ALLOWED_ORIGINS"] = "*"
 
 from cloudledger.database import Base  # noqa: E402
 
@@ -45,7 +46,7 @@ def db_session(monkeypatch):
         finally:
             session.close()
 
-    # Patch get_db everywhere it's used
+    # Patch get_db in every module that imports it
     import cloudledger.database
     import cloudledger.ingest
     import cloudledger.normalize
@@ -53,6 +54,8 @@ def db_session(monkeypatch):
     import cloudledger.quality
     import cloudledger.allocate
     import cloudledger.anomaly
+    import backend.server as server_mod
+
     monkeypatch.setattr(cloudledger.database, "get_db", _get_db)
     monkeypatch.setattr(cloudledger.ingest, "get_db", _get_db)
     monkeypatch.setattr(cloudledger.normalize, "get_db", _get_db)
@@ -60,7 +63,41 @@ def db_session(monkeypatch):
     monkeypatch.setattr(cloudledger.quality, "get_db", _get_db)
     monkeypatch.setattr(cloudledger.allocate, "get_db", _get_db)
     monkeypatch.setattr(cloudledger.anomaly, "get_db", _get_db)
+    # backend.server.get_db() delegates to cloudledger.database.get_db,
+    # but we patch it directly so TestClient threads use the right session
+    monkeypatch.setattr(server_mod, "get_db", _get_db)
 
     yield _get_db
 
     Base.metadata.drop_all(engine)
+
+
+@pytest.fixture
+def client(db_session, monkeypatch):
+    """FastAPI TestClient with patched database and a pre-authenticated user.
+
+    Provides a test client with a valid JWT in the Authorization header.
+    """
+    import cloudledger.database
+    import backend.server as server_mod
+    from backend.server import app
+    from backend.auth import create_token
+    from cloudledger.database import User
+
+    # Prevent lifespan from calling create_all_tables (already done by db_session)
+    monkeypatch.setattr(cloudledger.database, "create_all_tables", lambda: None)
+    monkeypatch.setattr(server_mod, "create_all_tables", lambda: None)
+
+    # Seed a test user
+    from backend.auth import hash_password
+    with db_session() as session:
+        user = User(email="test@example.com", password_hash=hash_password("testpass123"), name="Test")
+        session.add(user)
+        session.flush()
+        uid = user.id
+
+    token = create_token(uid, "test@example.com")
+
+    from fastapi.testclient import TestClient
+    with TestClient(app, headers={"Authorization": f"Bearer {token}"}) as tc:
+        yield tc
