@@ -306,14 +306,16 @@ def compute_variance(prior_period: str, current_period: str, baseline_mode: str 
 
         all_resource_ids = set(prior_resources.keys()) | set(current_resources.keys())
 
-        # Load charge types per resource for edge case detection
+        # Load charge types and tags per resource for edge case detection
         charge_type_map: Dict[str, List[str]] = {}
         description_map: Dict[str, str] = {}
+        tags_map: Dict[str, dict] = {}
         ct_rows = (
             session.query(
                 RawBillingLine.resource_id,
                 RawBillingLine.charge_type,
                 RawBillingLine.description,
+                RawBillingLine.tags,
             )
             .filter(RawBillingLine.billing_period_start == current_start)
             .all()
@@ -326,6 +328,16 @@ def compute_variance(prior_period: str, current_period: str, baseline_mode: str 
                     charge_type_map[row.resource_id].append(row.charge_type)
                 if row.description and row.resource_id not in description_map:
                     description_map[row.resource_id] = row.description
+                if row.tags and row.resource_id not in tags_map:
+                    t = row.tags
+                    if isinstance(t, str):
+                        import json as _json
+                        try:
+                            t = _json.loads(t)
+                        except (ValueError, TypeError):
+                            t = {}
+                    if isinstance(t, dict):
+                        tags_map[row.resource_id] = t
 
         # Load change events near the current billing period
         window_start = current_start - timedelta(days=7)
@@ -411,11 +423,8 @@ def compute_variance(prior_period: str, current_period: str, baseline_mode: str 
             # but store raw delta for reporting
             abs_norm_pct = abs(float(delta_pct_normalized)) if delta_pct_normalized is not None else 0
 
-            # Read tags from Resource if available (currently Resource has no tags column,
-            # so this falls back to empty dict — see fix commit for the real solution)
-            resource_tags = {}
-            if ref and hasattr(ref, 'tags') and ref.tags:
-                resource_tags = ref.tags if isinstance(ref.tags, dict) else {}
+            # Read tags from RawBillingLine (Resource has no tags column)
+            resource_tags = tags_map.get(rid, {})
 
             reason_code, confidence, is_excluded = classify_resource(
                 in_prior=rid in prior_resources,

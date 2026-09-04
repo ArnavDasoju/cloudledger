@@ -1,13 +1,8 @@
 """Characterization tests for the variance classification decision tree.
 
-Every reachable branch of compute_variance's reason-code logic is tested here.
-These tests document the CURRENT behavior so regressions are caught
-before any refactor of the classification logic.
-
-NOTE: The `non_terraform_iac` branch (variance.py:363) checks
-`hasattr(ref, 'tags')`, but the Resource model has no `tags` column.
-This means the branch is unreachable through compute_variance today.
-We test it as a unit test on a mock object instead, and flag the gap.
+Every branch of compute_variance's reason-code logic is tested here,
+including the classify_resource pure function and its integration
+through the full compute_variance pipeline.
 """
 
 from datetime import date, timedelta
@@ -16,6 +11,7 @@ from decimal import Decimal
 from cloudledger.database import Resource, ChangeEvent, VarianceReport, RawBillingLine
 from cloudledger.variance import (
     compute_variance,
+    classify_resource,
     _detect_charge_type_reason,
     _build_evidence_chain,
     _days_in_month,
@@ -176,22 +172,45 @@ class TestReasonCodeBranches:
         assert vr.reason_code == "legacy_untracked"
         assert float(vr.confidence_score) == 0.60
 
-    def test_non_terraform_iac_unreachable_via_db(self, db_session):
-        """The non_terraform_iac branch checks hasattr(ref, 'tags'), but
-        Resource has no tags column, so it falls through to orphan_sdk_created
-        (if team is set) instead. This documents the current behavior gap.
+    def test_non_terraform_iac_cloudformation_via_billing_tags(self, db_session):
+        """Not in TF, but billing line has CloudFormation tags -> 'non_terraform_iac'.
+
+        Tags are read from RawBillingLine (not Resource, which has no tags column).
         """
-        rid = "arn:aws:ec2:us-east-1:123:instance/i-cfn-gap"
+        rid = "arn:aws:ec2:us-east-1:123:instance/i-cfn"
         with db_session() as s:
-            # Even though this resource "should" be non_terraform_iac,
-            # the code can't detect it because Resource lacks a tags column
             _add_resource(s, rid, date(2025, 1, 1), 1000, in_tf=False, team="infra")
             _add_resource(s, rid, date(2025, 2, 1), 1100, in_tf=False, team="infra")
+            s.add(RawBillingLine(
+                resource_id=rid,
+                billing_period_start=date(2025, 2, 1),
+                charge_type="Usage",
+                billed_cost=Decimal("1100"),
+                tags={"aws:cloudformation:stack-name": "my-stack", "team": "infra"},
+            ))
 
         compute_variance("2025-01", "2025-02")
         vr = _get_vr(db_session, rid)
-        # Falls through to orphan_sdk_created because team is set but tags aren't accessible
-        assert vr.reason_code == "orphan_sdk_created"
+        assert vr.reason_code == "non_terraform_iac"
+        assert float(vr.confidence_score) == 0.85
+
+    def test_non_terraform_iac_managed_by_pulumi(self, db_session):
+        """Not in TF, managed_by=pulumi tag on billing line -> 'non_terraform_iac'."""
+        rid = "arn:aws:ec2:us-east-1:123:instance/i-pulumi"
+        with db_session() as s:
+            _add_resource(s, rid, date(2025, 1, 1), 500, in_tf=False, team="platform")
+            _add_resource(s, rid, date(2025, 2, 1), 550, in_tf=False, team="platform")
+            s.add(RawBillingLine(
+                resource_id=rid,
+                billing_period_start=date(2025, 2, 1),
+                charge_type="Usage",
+                billed_cost=Decimal("550"),
+                tags={"managed_by": "pulumi", "team": "platform"},
+            ))
+
+        compute_variance("2025-01", "2025-02")
+        vr = _get_vr(db_session, rid)
+        assert vr.reason_code == "non_terraform_iac"
 
 
 # ── Edge-case charge type detection ──────────────────────────────────────────
